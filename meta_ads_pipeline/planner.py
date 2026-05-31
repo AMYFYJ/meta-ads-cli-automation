@@ -399,16 +399,127 @@ def _bulk_change_actions(dataset: Dataset) -> list[Action]:
         object_type = clean(row.get("object_level")).lower()
         target = clean(row.get("object_key_or_meta_id"))
         field = clean(row.get("field"))
-        if object_type not in UPDATABLE_FIELDS or field not in UPDATABLE_FIELDS[object_type]:
+        operation = clean(row.get("operation")).upper() or "SET_FIELD"
+        if object_type not in UPDATABLE_FIELDS:
             continue
         target_ref = ids.get(object_type, {}).get(target) or (
             placeholder(object_type, target) if _target_is_known_key(dataset, object_type, target) else target
         )
+        if operation == "DUPLICATE":
+            duplicate_row = {
+                "job_key": change_key,
+                "object_level": object_type,
+                "source_key_or_meta_id": target,
+                "destination_parent_key_or_meta_id": "",
+                "copy_count": clean(row.get("new_value")) or "1",
+                "deep_copy": "TRUE",
+                "status_option": "PAUSED",
+                "rename_strategy": "APPEND",
+                "name_prefix": "",
+                "name_suffix": " | Copy",
+                "overrides_json": row.get("value_json"),
+            }
+            actions.append(
+                Action(
+                    action_id=f"090_bulk_{change_key}",
+                    operation="duplicate",
+                    object_type=object_type,
+                    object_key=target,
+                    command=["GRAPH", "POST", f"{target_ref}/copies"],
+                    payload={"row": row, "field": field, "new_value": clean(row.get("new_value")), "target": target},
+                    executor="graph",
+                    method="POST",
+                    endpoint=f"{target_ref}/copies",
+                    body=_duplicate_body(duplicate_row, dataset, object_type),
+                    id_path="",
+                    writeback=[
+                        ("BulkChanges", change_key, "applied_at", "$now"),
+                        ("BulkChanges", change_key, "result", "LIVE_DUPLICATED"),
+                        ("BulkChanges", change_key, "error", ""),
+                    ],
+                    depends_on=[_create_action_id(object_type, target)] if target_ref.startswith("${") else [],
+                    reason=clean(row.get("reason")) or "Approved bulk duplicate.",
+                    source_table="BulkChanges",
+                    source_key=change_key,
+                )
+            )
+            continue
+        if operation == "DELETE":
+            actions.append(
+                Action(
+                    action_id=f"090_bulk_{change_key}",
+                    operation="delete",
+                    object_type=object_type,
+                    object_key=target,
+                    command=["GRAPH", "DELETE", target_ref],
+                    payload={"row": row, "field": "status", "new_value": "DELETED", "target": target},
+                    executor="graph",
+                    method="DELETE",
+                    endpoint=target_ref,
+                    writeback=[
+                        ("BulkChanges", change_key, "applied_at", "$now"),
+                        ("BulkChanges", change_key, "result", "LIVE_DELETED"),
+                        ("BulkChanges", change_key, "error", ""),
+                    ],
+                    depends_on=[_create_action_id(object_type, target)] if target_ref.startswith("${") else [],
+                    reason=clean(row.get("reason")) or "Approved bulk delete.",
+                    source_table="BulkChanges",
+                    source_key=change_key,
+                )
+            )
+            continue
+        if operation == "PATCH_JSON":
+            actions.append(
+                Action(
+                    action_id=f"090_bulk_{change_key}",
+                    operation="patch",
+                    object_type=object_type,
+                    object_key=target,
+                    command=["GRAPH", "POST", target_ref],
+                    payload={"row": row, "field": field, "new_value": clean(row.get("new_value")), "target": target},
+                    executor="graph",
+                    method="POST",
+                    endpoint=target_ref,
+                    body=_json_value(row.get("value_json"), {}),
+                    writeback=[
+                        ("BulkChanges", change_key, "applied_at", "$now"),
+                        ("BulkChanges", change_key, "result", "LIVE_PATCHED"),
+                        ("BulkChanges", change_key, "error", ""),
+                    ],
+                    depends_on=[_create_action_id(object_type, target)] if target_ref.startswith("${") else [],
+                    reason=clean(row.get("reason")) or "Approved JSON patch.",
+                    source_table="BulkChanges",
+                    source_key=change_key,
+                )
+            )
+            continue
+        if operation == "ACTIVATE":
+            field = "desired_status"
+            row["new_value"] = "ACTIVE"
+        elif operation == "PAUSE":
+            field = "desired_status"
+            row["new_value"] = "PAUSED"
+        elif operation == "REPLACE_CREATIVE":
+            field = "creative_key"
+        elif operation == "REPLACE_TARGETING":
+            field = "targeting_preset_key" if clean(row.get("new_value")) else "targeting_json"
+        if field not in UPDATABLE_FIELDS[object_type]:
+            continue
         command = _meta_prefix_for_object(dataset, object_type, target) + [object_type, "update", target_ref]
         value = clean(row.get("new_value"))
         if object_type == "ad" and field == "creative_key":
             value = ids.get("creative", {}).get(value) or placeholder("creative", value)
-        _extend(command, UPDATABLE_FIELDS[object_type][field], value)
+        api_field = UPDATABLE_FIELDS[object_type][field]
+        if api_field.startswith("--"):
+            _extend(command, api_field, value)
+            executor = "cli"
+            endpoint = ""
+            body = {}
+        else:
+            command = ["GRAPH", "POST", target_ref]
+            executor = "graph"
+            endpoint = target_ref
+            body = {api_field: _json_value(value, value) if field.endswith("_json") else value}
         depends = []
         if target_ref.startswith("${"):
             depends.append(_create_action_id(object_type, target))
@@ -422,6 +533,10 @@ def _bulk_change_actions(dataset: Dataset) -> list[Action]:
                 object_key=target,
                 command=command,
                 payload={"row": row, "field": field, "new_value": value, "target": target},
+                executor=executor,
+                method="POST",
+                endpoint=endpoint,
+                body=body,
                 depends_on=depends,
                 reason=clean(row.get("reason")) or "Approved bulk change.",
                 source_table="BulkChanges",

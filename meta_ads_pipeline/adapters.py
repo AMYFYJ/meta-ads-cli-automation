@@ -51,6 +51,10 @@ class MockMetaAdapter:
             return self._upload(action, context)
         if action.operation == "duplicate":
             return self._duplicate(action, context)
+        if action.operation == "patch":
+            return self._patch(action, context)
+        if action.operation == "delete":
+            return self._delete(action, context)
         if action.operation == "update":
             return self._update(action, context)
         return ActionResult(action=action, ok=False, message=f"Unsupported operation: {action.operation}")
@@ -193,6 +197,47 @@ class MockMetaAdapter:
             updates=updates,
         )
 
+    def _patch(self, action: Action, context: dict[str, dict[str, str]]) -> ActionResult:
+        meta_id = context.get(action.object_type, {}).get(action.object_key) or action.object_key
+        self.state.setdefault("objects", {}).setdefault(action.object_type, {}).setdefault(meta_id, {})
+        self.state["objects"][action.object_type][meta_id].update(action.body)
+        updates = [
+            ("BulkChanges", action.source_key, "applied_at", utc_now()),
+            ("BulkChanges", action.source_key, "result", "MOCK_PATCHED"),
+            ("BulkChanges", action.source_key, "error", ""),
+        ]
+        return ActionResult(
+            action=action,
+            ok=True,
+            meta_id=meta_id,
+            message=f"Mock patched {action.object_type}.",
+            stdout=json.dumps({"id": meta_id, "body": action.body, "mock": True}),
+            updates=updates,
+        )
+
+    def _delete(self, action: Action, context: dict[str, dict[str, str]]) -> ActionResult:
+        meta_id = context.get(action.object_type, {}).get(action.object_key) or action.object_key
+        self.state.setdefault("objects", {}).setdefault(action.object_type, {}).setdefault(meta_id, {})
+        self.state["objects"][action.object_type][meta_id]["deleted"] = True
+        updates = [
+            ("BulkChanges", action.source_key, "applied_at", utc_now()),
+            ("BulkChanges", action.source_key, "result", "MOCK_DELETED"),
+            ("BulkChanges", action.source_key, "error", ""),
+        ]
+        table_config = OBJECT_CONFIG.get(action.object_type)
+        if table_config and _row_exists(self.dataset, table_config[0], table_config[1], action.object_key):
+            status_column = "desired_status" if "desired_status" in TABLES[table_config[0]].columns else "status"
+            if status_column in TABLES[table_config[0]].columns:
+                updates.append((table_config[0], action.object_key, status_column, "DELETED"))
+        return ActionResult(
+            action=action,
+            ok=True,
+            meta_id=meta_id,
+            message=f"Mock deleted {action.object_type}.",
+            stdout=json.dumps({"id": meta_id, "deleted": True, "mock": True}),
+            updates=updates,
+        )
+
 
 class LiveMetaCliAdapter:
     def __init__(self, dataset: Dataset):
@@ -281,7 +326,7 @@ class LiveMetaCliAdapter:
             return ActionResult(action=action, ok=False, message="Graph API action failed.", stderr=str(exc))
 
         meta_id = _extract_duplicate_ids(response_body) if action.operation == "duplicate" else _extract_path(response_body, action.id_path)
-        ok = bool(meta_id) or action.operation in {"update", "delete", "upload", "duplicate"}
+        ok = bool(meta_id) or action.operation in {"update", "delete", "upload", "duplicate", "patch"}
         if ok and meta_id:
             context.setdefault(action.object_type, {})[action.object_key] = meta_id
         updates = self._updates_for_live_result(action, ok, meta_id, "")

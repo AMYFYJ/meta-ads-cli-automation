@@ -30,7 +30,7 @@ class PipelineTest(unittest.TestCase):
             self.assertFalse(has_blocking_errors(issues), [issue.message for issue in issues])
 
             actions = build_plan(dataset)
-            self.assertEqual(len(actions), 18)
+            self.assertEqual(len(actions), 19)
             results, updates, append_rows = execute_actions(dataset, actions, mode="mock", state_path=str(state))
             self.assertTrue(all(result.ok for result in results), [result.message for result in results])
             save_with_updates(dataset, str(applied), updates, append_rows)

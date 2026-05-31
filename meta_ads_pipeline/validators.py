@@ -9,9 +9,11 @@ from .schema import (
     AUDIENCE_TYPES,
     AUDIENCE_UPLOAD_OPERATIONS,
     BUDGET_MODES,
+    BULK_OPERATIONS,
     CREATE_TABLES,
     OBJECT_CONFIG,
     OBJECTIVES,
+    OPTIMIZATION_OPERATORS,
     STATUSES,
     TABLES,
     UPDATABLE_FIELDS,
@@ -249,6 +251,18 @@ def _validate_values(dataset: Dataset) -> list[ValidationIssue]:
         _json_guard(issues, "DuplicateJobs", key, "overrides_json", row.get("overrides_json"))
         if not approved(row.get("approval_status")):
             issues.append(ValidationIssue("INFO", "DuplicateJobs", key, "approval_status", "Duplicate job is not approved and will not apply."))
+    for row in dataset.tables.get("OptimizationRules", []):
+        key = row_key("OptimizationRules", row)
+        if clean(row.get("operator")) not in OPTIMIZATION_OPERATORS:
+            issues.append(ValidationIssue("ERROR", "OptimizationRules", key, "operator", "Use >, >=, <, <=, ==, or !=."))
+        if to_int(row.get("max_actions")) is None and not is_blank(row.get("max_actions")):
+            issues.append(ValidationIssue("ERROR", "OptimizationRules", key, "max_actions", "max_actions must be numeric when provided."))
+        try:
+            float(clean(row.get("threshold")))
+        except ValueError:
+            issues.append(ValidationIssue("ERROR", "OptimizationRules", key, "threshold", "threshold must be numeric."))
+        if not approved(row.get("approval_status")):
+            issues.append(ValidationIssue("INFO", "OptimizationRules", key, "approval_status", "Optimization rule is not approved and will not generate changes."))
     for row in dataset.tables.get("Ads", []):
         key = row_key("Ads", row)
         _status_guard(issues, "Ads", key, row.get("desired_status"))
@@ -281,11 +295,18 @@ def _validate_bulk_changes(dataset: Dataset) -> list[ValidationIssue]:
         object_level = clean(row.get("object_level")).lower()
         field = clean(row.get("field"))
         target = clean(row.get("object_key_or_meta_id"))
+        operation = clean(row.get("operation")).upper() or "SET_FIELD"
+        if operation not in BULK_OPERATIONS:
+            issues.append(ValidationIssue("ERROR", "BulkChanges", key, "operation", f"Unsupported operation: {operation}."))
         if object_level not in UPDATABLE_FIELDS:
             issues.append(ValidationIssue("ERROR", "BulkChanges", key, "object_level", "Object level must be campaign, adset, creative, or ad."))
             continue
-        if field not in UPDATABLE_FIELDS[object_level]:
+        if operation in {"SET_FIELD", "REPLACE_CREATIVE", "REPLACE_TARGETING"} and field not in UPDATABLE_FIELDS[object_level]:
             issues.append(ValidationIssue("ERROR", "BulkChanges", key, "field", f"Field is not bulk-editable for {object_level}."))
+        if operation in {"SET_FIELD", "REPLACE_CREATIVE", "REPLACE_TARGETING"} and is_blank(row.get("new_value")):
+            issues.append(ValidationIssue("ERROR", "BulkChanges", key, "new_value", "new_value is required for this operation."))
+        if operation == "PATCH_JSON":
+            _json_guard(issues, "BulkChanges", key, "value_json", row.get("value_json"))
         if target and target not in keys_by_object.get(object_level, set()) and not _looks_like_meta_id(target):
             issues.append(ValidationIssue("WARNING", "BulkChanges", key, "object_key_or_meta_id", "Target is not a known row key; treating it as an existing Meta ID."))
         if not approved(row.get("approval_status")):

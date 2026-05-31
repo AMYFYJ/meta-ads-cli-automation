@@ -9,6 +9,7 @@ from typing import Any
 from .assets import ensure_sample_assets
 from .executor import execute_actions, validation_rows
 from .insights import generate_mock_insights, get_live_insights
+from .optimization import generate_optimization_changes
 from .planner import action_dicts, build_plan
 from .schema import TABLES
 from .storage import create_sqlite_template, create_template, load_source, save_with_updates
@@ -62,6 +63,8 @@ def build_parser() -> argparse.ArgumentParser:
     bulk.add_argument("--object-key", required=True)
     bulk.add_argument("--field", required=True)
     bulk.add_argument("--value", required=True)
+    bulk.add_argument("--operation", default="SET_FIELD")
+    bulk.add_argument("--value-json", default="")
     bulk.add_argument("--reason", default="")
     bulk.add_argument("--requested-by", default="")
     bulk.add_argument("--approval-status", default="APPROVED")
@@ -74,6 +77,11 @@ def build_parser() -> argparse.ArgumentParser:
     insights.add_argument("--date-preset", default="last_7d")
     insights.add_argument("--level", default="ad")
     insights.set_defaults(func=cmd_insights)
+
+    optimize = sub.add_parser("optimize", help="Generate approved bulk changes from OptimizationRules and PerformanceSnapshots.")
+    optimize.add_argument("--source", required=True)
+    optimize.add_argument("--out-source", required=True)
+    optimize.set_defaults(func=cmd_optimize)
 
     demo = sub.add_parser("demo", help="Run the complete team demo workflow in mock mode.")
     demo.add_argument("--workdir", default="outputs/demo")
@@ -152,11 +160,13 @@ def cmd_bulk_edit(args: argparse.Namespace) -> int:
     next_id = _next_change_id(dataset.tables.get("BulkChanges", []))
     row = {
         "change_id": next_id,
+        "operation": args.operation,
         "object_level": args.object_level,
         "object_key_or_meta_id": args.object_key,
         "field": args.field,
         "old_value": "",
         "new_value": args.value,
+        "value_json": args.value_json,
         "effective_at": "",
         "reason": args.reason,
         "requested_by": args.requested_by,
@@ -182,6 +192,18 @@ def cmd_insights(args: argparse.Namespace) -> int:
         append_rows = {"PerformanceSnapshots": rows}
     save_with_updates(dataset, args.out_source, [], append_rows)
     print(f"Appended {len(append_rows.get('PerformanceSnapshots', []))} insights rows -> {args.out_source}")
+    return 0
+
+
+def cmd_optimize(args: argparse.Namespace) -> int:
+    dataset = load_source(args.source)
+    issues = validate_dataset(dataset)
+    if has_blocking_errors(issues):
+        _print_issues(issues)
+        return 1
+    changes = generate_optimization_changes(dataset)
+    save_with_updates(dataset, args.out_source, [], {"BulkChanges": changes})
+    print(f"Generated {len(changes)} optimization bulk changes -> {args.out_source}")
     return 0
 
 

@@ -281,11 +281,13 @@ TABLES: dict[str, TableSpec] = {
         key_column="change_id",
         columns=[
             "change_id",
+            "operation",
             "object_level",
             "object_key_or_meta_id",
             "field",
             "old_value",
             "new_value",
+            "value_json",
             "effective_at",
             "reason",
             "requested_by",
@@ -294,7 +296,28 @@ TABLES: dict[str, TableSpec] = {
             "result",
             "error",
         ],
-        required=["change_id", "object_level", "object_key_or_meta_id", "field", "new_value", "approval_status"],
+        required=["change_id", "object_level", "object_key_or_meta_id", "approval_status"],
+    ),
+    "OptimizationRules": TableSpec(
+        name="OptimizationRules",
+        key_column="rule_key",
+        columns=[
+            "rule_key",
+            "scope_level",
+            "metric",
+            "operator",
+            "threshold",
+            "action_object_level",
+            "action_field",
+            "action_value",
+            "max_actions",
+            "approval_status",
+            "generated_change_prefix",
+            "last_result",
+            "last_error",
+            "updated_at",
+        ],
+        required=["rule_key", "scope_level", "metric", "operator", "threshold", "action_object_level", "action_field", "action_value", "approval_status"],
     ),
     "PerformanceSnapshots": TableSpec(
         name="PerformanceSnapshots",
@@ -388,19 +411,28 @@ UPDATABLE_FIELDS = {
         "desired_status": "--status",
         "daily_budget_cents": "--daily-budget",
         "lifetime_budget_cents": "--lifetime-budget",
+        "bid_strategy": "bid_strategy",
+        "spend_cap": "spend_cap",
+        "campaign_budget_optimization": "campaign_budget_optimization",
     },
     "adset": {
         "name": "--name",
         "status": "--status",
         "desired_status": "--status",
+        "optimization_goal": "optimization_goal",
+        "billing_event": "billing_event",
         "daily_budget_cents": "--daily-budget",
         "lifetime_budget_cents": "--lifetime-budget",
         "bid_amount_cents": "--bid-amount",
+        "bid_strategy": "bid_strategy",
+        "daily_min_spend_target": "daily_min_spend_target",
+        "daily_spend_cap": "daily_spend_cap",
         "start_time": "--start-time",
         "end_time": "--end-time",
         "targeting_preset_key": "targeting",
         "targeting_json": "targeting",
         "targeting_automation_json": "targeting_automation",
+        "promoted_object_json": "promoted_object",
     },
     "creative": {
         "name": "--name",
@@ -440,6 +472,8 @@ STATUSES = {"ACTIVE", "PAUSED", "DELETED", "ARCHIVED"}
 BUDGET_MODES = {"CBO", "ABO"}
 AUDIENCE_TYPES = {"CUSTOM", "LOOKALIKE", "WEBSITE", "SAVED"}
 AUDIENCE_UPLOAD_OPERATIONS = {"ADD", "REMOVE", "REPLACE"}
+BULK_OPERATIONS = {"SET_FIELD", "PATCH_JSON", "ACTIVATE", "PAUSE", "DELETE", "DUPLICATE", "REPLACE_CREATIVE", "REPLACE_TARGETING"}
+OPTIMIZATION_OPERATORS = {">", ">=", "<", "<=", "==", "!="}
 
 
 def clean(value: Any) -> str:
