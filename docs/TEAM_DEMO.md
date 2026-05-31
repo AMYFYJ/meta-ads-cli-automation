@@ -24,9 +24,13 @@ Show the workbook tabs:
 - `Accounts`: account/business setup.
 - `Campaigns`: campaign shell and CBO/ABO budget strategy.
 - `AdSets`: targeting, conversion event, bid caps, flight dates.
+- `Audiences` / `AudienceUploads`: custom, lookalike, website, saved audiences, and CRM uploads.
+- `TargetingPresets` / `AutomationSettings`: reusable audiences plus Advantage+ toggles.
 - `Creatives`: copy, CTA, URL, asset references.
 - `Ads`: ad set to creative mapping.
+- `DuplicateJobs`: campaign/ad set/ad copy jobs.
 - `BulkChanges`: approved updates.
+- `OptimizationRules`: rules that create bulk changes from performance.
 - `PublishLog`: audit log.
 - `PerformanceSnapshots`: reporting feed.
 
@@ -38,7 +42,7 @@ python3 -m meta_ads_pipeline plan \
   --out outputs/demo/team_plan.json
 ```
 
-Open `outputs/demo/team_plan.json`. It should include account creation, campaign creation, ad set creation, creative creation, ad creation, and three approved bulk edits.
+Open `outputs/demo/team_plan.json`. It should include account creation, audience creation/upload, campaign creation, Graph-backed ad set creation with targeting/Advantage+ settings, creative creation, ad creation, duplicate jobs, and approved bulk edits.
 
 ## 4. Show Apply and ID Sync
 
@@ -90,7 +94,19 @@ python3 -m meta_ads_pipeline apply \
 python3 -m meta_ads_pipeline insights \
   --source outputs/demo/team_after_bulk_edit.xlsx \
   --mode mock \
+  --breakdown publisher_platform \
+  --breakdown age \
   --out-source outputs/demo/team_insights.xlsx
 ```
 
-Open `team_insights.xlsx` and show the ad-level performance rows. In live mode this table is fed by `meta ads insights get`.
+Open `team_insights.xlsx` and show the ad-level performance plus breakdown rows. In live mode this table is fed by `meta ads insights get`.
+
+## 7. Generate Optimization Changes
+
+```bash
+python3 -m meta_ads_pipeline optimize \
+  --source outputs/demo/team_insights.xlsx \
+  --out-source outputs/demo/team_optimized.xlsx
+```
+
+Open `team_optimized.xlsx` and show the new optimization-generated rows in `BulkChanges`.

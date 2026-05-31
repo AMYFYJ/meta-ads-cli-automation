@@ -45,6 +45,49 @@ Important fields:
 - `countries`, `regions`, `age_min`, `age_max`, `genders`, `placements`.
 - `custom_audiences`, `excluded_audiences`, `interests`.
 - `pixel_dataset_id`, `pixel_event`, `attribution_window`.
+- `targeting_preset_key`, `targeting_json`, `targeting_automation_json`, `promoted_object_json`: advanced targeting and Advantage+ controls that use the Graph API path.
+
+### Audiences
+
+One row per custom, lookalike, website, or saved audience.
+
+Important fields:
+
+- `audience_key`, `account_key`, `meta_audience_id`.
+- `audience_type`: `CUSTOM`, `LOOKALIKE`, `WEBSITE`, or `SAVED`.
+- `source_audience_key`, `lookalike_ratio`, `lookalike_spec_json`: lookalike setup.
+- `rule_json`, `retention_days`, `pixel_dataset_id`: website/pixel audiences.
+- `targeting_json`: saved audience targeting.
+
+### AudienceUploads
+
+Upload rows into customer-list custom audiences.
+
+Important fields:
+
+- `upload_key`, `audience_key`, `operation`: `ADD`, `REMOVE`, or `REPLACE`.
+- `schema`, `data_path`, `data_json`, `hash_type`.
+
+### TargetingPresets
+
+Reusable targeting bundles for ad sets.
+
+Important fields:
+
+- `countries`, `regions`, `cities`, `zips`, `age_min`, `age_max`, `genders`.
+- `custom_audience_keys`, `excluded_audience_keys`.
+- `placements`, `publisher_platforms`, `facebook_positions`, `instagram_positions`, `device_platforms`.
+- `targeting_json` for raw Graph API targeting overrides.
+
+### AutomationSettings
+
+Approved toggles for Advantage+ and automation settings.
+
+Important fields:
+
+- `object_level`, `object_key`.
+- `advantage_audience`, `detailed_targeting_expansion`, `custom_audience_expansion`, `advantage_placements`.
+- `targeting_automation_json`, `creative_features_json`.
 
 ### Creatives
 
@@ -69,6 +112,16 @@ Important fields:
 - `tracking_specs`, `url_tags`.
 - `desired_status`, `launch_batch`, `approval_status`.
 
+### DuplicateJobs
+
+Duplicate campaigns, ad sets, or ads.
+
+Important fields:
+
+- `object_level`, `source_key_or_meta_id`, `destination_parent_key_or_meta_id`.
+- `copy_count`, `deep_copy`, `status_option`, `rename_strategy`, `name_prefix`, `name_suffix`.
+- `overrides_json` for post-copy payload values.
+
 ## Operations Tables
 
 ### BulkChanges
@@ -77,11 +130,13 @@ Queue all edits here instead of manually changing live objects in Ads Manager.
 
 Use cases:
 
+- Operation type: `SET_FIELD`, `PATCH_JSON`, `ACTIVATE`, `PAUSE`, `DELETE`, `DUPLICATE`, `REPLACE_CREATIVE`, or `REPLACE_TARGETING`.
 - Campaign budget changes: `object_level=campaign`, `field=daily_budget_cents`.
 - Bid cap changes: `object_level=adset`, `field=bid_amount_cents`.
 - Flight date changes: `object_level=adset`, `field=start_time` or `field=end_time`.
 - Status changes: `field=desired_status` with `new_value=ACTIVE` or `PAUSED`.
 - Creative swaps: `object_level=ad`, `field=creative_key`, `new_value=<creative_key>`.
+- Raw advanced updates: `operation=PATCH_JSON`, `value_json=<Graph API payload>`.
 
 The pipeline applies only approved, unapplied rows.
 
@@ -107,5 +162,16 @@ Recommended metrics:
 - Conversion: `conversions`, `cost_per_result`, `purchases`, `purchase_value`, `roas`, `leads`, `cpl`.
 - Funnel: `add_to_cart`, `initiate_checkout`.
 - Pacing: `budget_utilization`, `pacing_ratio`.
+- Breakdown fields: `breakdown_type`, `breakdown_value`, `publisher_platform`, `platform_position`, `country`, `region`, `age`, `gender`, `device_platform`.
 
 Use these to trigger optimization rules such as pausing low-ROAS ads, increasing budgets on under-paced winners, reducing bid caps on expensive ad sets, or flagging high frequency.
+
+### OptimizationRules
+
+Rules that generate approved `BulkChanges` from `PerformanceSnapshots`.
+
+Important fields:
+
+- `scope_level`, `metric`, `operator`, `threshold`.
+- `action_object_level`, `action_field`, `action_value`.
+- `max_actions`, `generated_change_prefix`, `approval_status`.

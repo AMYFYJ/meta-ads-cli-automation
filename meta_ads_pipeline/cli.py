@@ -76,6 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     insights.add_argument("--out-source", required=True)
     insights.add_argument("--date-preset", default="last_7d")
     insights.add_argument("--level", default="ad")
+    insights.add_argument("--breakdown", action="append", default=[])
     insights.set_defaults(func=cmd_insights)
 
     optimize = sub.add_parser("optimize", help="Generate approved bulk changes from OptimizationRules and PerformanceSnapshots.")
@@ -183,9 +184,9 @@ def cmd_bulk_edit(args: argparse.Namespace) -> int:
 def cmd_insights(args: argparse.Namespace) -> int:
     dataset = load_source(args.source)
     if args.mode == "mock":
-        append_rows = generate_mock_insights(dataset)
+        append_rows = generate_mock_insights(dataset, breakdowns=args.breakdown)
     else:
-        ok, message, rows = get_live_insights(args.date_preset, args.level)
+        ok, message, rows = get_live_insights(args.date_preset, args.level, breakdowns=args.breakdown)
         if not ok:
             print(message, file=sys.stderr)
             return 1
@@ -229,7 +230,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
     append_rows.setdefault("ValidationErrors", []).extend(validation_rows(issues).get("ValidationErrors", []))
     save_with_updates(dataset, str(applied), updates, append_rows)
     applied_dataset = load_source(str(applied))
-    save_with_updates(applied_dataset, str(insights), [], generate_mock_insights(applied_dataset))
+    save_with_updates(applied_dataset, str(insights), [], generate_mock_insights(applied_dataset, breakdowns=["publisher_platform", "age"]))
     print(f"Demo complete: {workdir}")
     print(f"- Workbook: {workbook}")
     print(f"- Plan: {plan}")

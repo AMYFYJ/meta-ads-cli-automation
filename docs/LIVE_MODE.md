@@ -50,6 +50,18 @@ python3 -m meta_ads_pipeline apply \
   --yes
 ```
 
+For insights with breakdowns:
+
+```bash
+python3 -m meta_ads_pipeline insights \
+  --source outputs/live_applied_workbook.xlsx \
+  --mode live \
+  --level ad \
+  --breakdown publisher_platform \
+  --breakdown platform_position \
+  --out-source outputs/live_insights_workbook.xlsx
+```
+
 ## Safety Rules
 
 - Keep new objects `PAUSED` until QA is complete.
@@ -57,6 +69,7 @@ python3 -m meta_ads_pipeline apply \
 - Review `PublishLog` after every live run.
 - Use budget guardrails in `Accounts.max_daily_budget_cents`.
 - Prefer one launch batch at a time for the first live rollout.
+- Review Graph-backed actions carefully in `plan.json`: audiences, uploads, targeting presets, Advantage+ toggles, duplicate jobs, JSON patches, and deletes all use Graph API fallback.
 
 ## Known Limitation
 

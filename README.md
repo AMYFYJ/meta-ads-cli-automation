@@ -5,8 +5,9 @@ This project turns a campaign planning workbook or SQLite database into a repeat
 ## What It Covers
 
 - Account bootstrap tracking, including optional API-based ad account creation fallback.
-- Campaign, ad set, creative, and ad creation.
-- Bulk edits for budgets, bid caps, flight dates, statuses, names, copy, URLs, CTAs, and creative swaps.
+- Campaign, ad set, creative, ad, custom audience, lookalike audience, website audience, and saved audience creation.
+- Audience uploads, reusable targeting presets, Advantage+ / automation toggles, duplicate jobs, and optimization rules.
+- Bulk edits for budgets, bid caps, bid strategy, optimization goal, targeting, flight dates, statuses, names, copy, URLs, CTAs, JSON patches, deletes, duplicates, and creative swaps.
 - Validation, dry-run planning, apply, ID sync back into the source of truth, audit logging, and insight snapshots.
 - Excel-first workflow with the same tables supported in SQLite for a database-backed version.
 
@@ -83,9 +84,32 @@ Generate mock insights:
 python3 -m meta_ads_pipeline insights \
   --source outputs/applied_workbook.xlsx \
   --mode mock \
-  --state outputs/mock_state.json \
+  --breakdown publisher_platform \
+  --breakdown age \
   --out-source outputs/insights_workbook.xlsx
 ```
+
+Generate optimization-rule bulk changes from the insight rows:
+
+```bash
+python3 -m meta_ads_pipeline optimize \
+  --source outputs/insights_workbook.xlsx \
+  --out-source outputs/optimized_workbook.xlsx
+```
+
+## Coverage Matrix
+
+| Workflow | Mock | Live path |
+| --- | --- | --- |
+| Campaign/ad set/creative/ad create/update | Yes | Official `meta-ads` CLI when fields are supported; Graph API for advanced targeting fields |
+| Custom/lookalike/website/saved audiences | Yes | Graph API |
+| Audience uploads | Yes | Graph API |
+| Targeting presets and Advantage+ toggles | Yes | Graph API ad set payloads |
+| Duplicate campaigns/ad sets/ads | Yes | Graph API copy endpoints |
+| Budget/bid/date/status/copy/creative bulk changes | Yes | CLI or Graph depending on field |
+| JSON patch/delete/duplicate bulk operations | Yes | Graph API |
+| Insights and breakdowns | Yes | Official `meta-ads` CLI |
+| Optimization rules to bulk changes | Yes | Local rule engine, then normal apply |
 
 ## Live Mode
 
