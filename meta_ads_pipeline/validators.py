@@ -126,6 +126,28 @@ def _validate_relationships(dataset: Dataset) -> list[ValidationIssue]:
             issues.append(ValidationIssue("ERROR", "AutomationSettings", key, "object_level", "Use campaign, adset, creative, or ad."))
         elif object_key not in valid_automation_targets[object_level]:
             issues.append(ValidationIssue("ERROR", "AutomationSettings", key, "object_key", f"No matching {object_level} row."))
+    duplicate_sources = {
+        "campaign": campaign_keys,
+        "adset": adset_keys,
+        "ad": _keys(dataset, "Ads"),
+    }
+    duplicate_destination_parents = {
+        "campaign": account_keys,
+        "adset": campaign_keys,
+        "ad": adset_keys,
+    }
+    for row in dataset.tables.get("DuplicateJobs", []):
+        key = row_key("DuplicateJobs", row)
+        object_level = clean(row.get("object_level")).lower()
+        source = clean(row.get("source_key_or_meta_id"))
+        destination = clean(row.get("destination_parent_key_or_meta_id"))
+        if object_level not in duplicate_sources:
+            issues.append(ValidationIssue("ERROR", "DuplicateJobs", key, "object_level", "Use campaign, adset, or ad."))
+            continue
+        if source not in duplicate_sources[object_level] and not _looks_like_meta_id(source):
+            issues.append(ValidationIssue("ERROR", "DuplicateJobs", key, "source_key_or_meta_id", f"No matching source {object_level} row."))
+        if destination and destination not in duplicate_destination_parents[object_level] and not _looks_like_meta_id(destination):
+            issues.append(ValidationIssue("ERROR", "DuplicateJobs", key, "destination_parent_key_or_meta_id", "Destination parent is not a known key or Meta ID."))
     return issues
 
 
@@ -219,6 +241,14 @@ def _validate_values(dataset: Dataset) -> list[ValidationIssue]:
         _json_guard(issues, "AutomationSettings", key, "creative_features_json", row.get("creative_features_json"))
         if not approved(row.get("approval_status")):
             issues.append(ValidationIssue("INFO", "AutomationSettings", key, "approval_status", "Automation settings row is not approved and will not be applied."))
+    for row in dataset.tables.get("DuplicateJobs", []):
+        key = row_key("DuplicateJobs", row)
+        copy_count = to_int(row.get("copy_count"))
+        if copy_count is None or copy_count <= 0:
+            issues.append(ValidationIssue("ERROR", "DuplicateJobs", key, "copy_count", "Copy count must be a positive integer."))
+        _json_guard(issues, "DuplicateJobs", key, "overrides_json", row.get("overrides_json"))
+        if not approved(row.get("approval_status")):
+            issues.append(ValidationIssue("INFO", "DuplicateJobs", key, "approval_status", "Duplicate job is not approved and will not apply."))
     for row in dataset.tables.get("Ads", []):
         key = row_key("Ads", row)
         _status_guard(issues, "Ads", key, row.get("desired_status"))

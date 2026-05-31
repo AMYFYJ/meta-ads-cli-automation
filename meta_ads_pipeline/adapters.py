@@ -49,6 +49,8 @@ class MockMetaAdapter:
             return self._create(action, context)
         if action.operation == "upload":
             return self._upload(action, context)
+        if action.operation == "duplicate":
+            return self._duplicate(action, context)
         if action.operation == "update":
             return self._update(action, context)
         return ActionResult(action=action, ok=False, message=f"Unsupported operation: {action.operation}")
@@ -161,6 +163,36 @@ class MockMetaAdapter:
             updates=updates,
         )
 
+    def _duplicate(self, action: Action, context: dict[str, dict[str, str]]) -> ActionResult:
+        source_id = context.get(action.object_type, {}).get(action.object_key) or action.object_key
+        count = int(action.body.get("copy_count", 1))
+        copied_ids = [
+            _mock_id(action.object_type, f"{action.object_key}:{action.source_key}:{idx}")
+            for idx in range(1, count + 1)
+        ]
+        self.state.setdefault("objects", {}).setdefault(action.object_type, {})
+        for copied_id in copied_ids:
+            self.state["objects"][action.object_type][copied_id] = {
+                "source_id": source_id,
+                "duplicate_job": action.source_key,
+                "payload": action.body,
+                "created_at": utc_now(),
+            }
+        updates = [
+            ("DuplicateJobs", action.source_key, "applied_at", utc_now()),
+            ("DuplicateJobs", action.source_key, "result_meta_ids", ",".join(copied_ids)),
+            ("DuplicateJobs", action.source_key, "result", "MOCK_DUPLICATED"),
+            ("DuplicateJobs", action.source_key, "error", ""),
+        ]
+        return ActionResult(
+            action=action,
+            ok=True,
+            meta_id=",".join(copied_ids),
+            message=f"Mock duplicated {action.object_type} {count} time(s).",
+            stdout=json.dumps({"ids": copied_ids, "mock": True}),
+            updates=updates,
+        )
+
 
 class LiveMetaCliAdapter:
     def __init__(self, dataset: Dataset):
@@ -248,8 +280,8 @@ class LiveMetaCliAdapter:
         except Exception as exc:  # noqa: BLE001 - keep Meta/API failures visible in PublishLog.
             return ActionResult(action=action, ok=False, message="Graph API action failed.", stderr=str(exc))
 
-        meta_id = _extract_path(response_body, action.id_path)
-        ok = bool(meta_id) or action.operation in {"update", "delete", "upload"}
+        meta_id = _extract_duplicate_ids(response_body) if action.operation == "duplicate" else _extract_path(response_body, action.id_path)
+        ok = bool(meta_id) or action.operation in {"update", "delete", "upload", "duplicate"}
         if ok and meta_id:
             context.setdefault(action.object_type, {})[action.object_key] = meta_id
         updates = self._updates_for_live_result(action, ok, meta_id, "")
@@ -395,6 +427,32 @@ def _extract_path(stdout: str, path: str) -> str:
         else:
             return ""
     return "" if current is None else str(current)
+
+
+def _extract_duplicate_ids(stdout: str) -> str:
+    text = stdout.strip()
+    if not text:
+        return ""
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return ""
+    ids: list[str] = []
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key.endswith("_id") or key == "id":
+                    if isinstance(item, (str, int)):
+                        ids.append(str(item))
+                else:
+                    visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(parsed)
+    return ",".join(dict.fromkeys(ids))
 
 
 def build_graph_request(action: Action, context: dict[str, dict[str, str]], token: str) -> urllib.request.Request:

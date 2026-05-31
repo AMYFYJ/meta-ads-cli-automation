@@ -30,7 +30,7 @@ class PipelineTest(unittest.TestCase):
             self.assertFalse(has_blocking_errors(issues), [issue.message for issue in issues])
 
             actions = build_plan(dataset)
-            self.assertEqual(len(actions), 16)
+            self.assertEqual(len(actions), 18)
             results, updates, append_rows = execute_actions(dataset, actions, mode="mock", state_path=str(state))
             self.assertTrue(all(result.ok for result in results), [result.message for result in results])
             save_with_updates(dataset, str(applied), updates, append_rows)
@@ -51,6 +51,7 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(applied_dataset.tables["AdSets"][0]["bid_amount_cents"], "1500")
             self.assertEqual(applied_dataset.tables["BulkChanges"][0]["result"], "MOCK_UPDATED")
             self.assertTrue(applied_dataset.tables["AudienceUploads"][0]["result"].startswith("MOCK_UPLOADED_"))
+            self.assertEqual(applied_dataset.tables["DuplicateJobs"][0]["result"], "MOCK_DUPLICATED")
 
             state_data = json.loads(state.read_text(encoding="utf-8"))
             self.assertIn("cmp_spring_launch", state_data["ids"]["campaign"])

@@ -27,6 +27,7 @@ def build_plan(dataset: Dataset) -> list[Action]:
     actions.extend(_adset_actions(dataset))
     actions.extend(_creative_actions(dataset))
     actions.extend(_ad_actions(dataset))
+    actions.extend(_duplicate_actions(dataset))
     actions.extend(_bulk_change_actions(dataset))
     return actions
 
@@ -430,6 +431,58 @@ def _bulk_change_actions(dataset: Dataset) -> list[Action]:
     return actions
 
 
+def _duplicate_actions(dataset: Dataset) -> list[Action]:
+    actions: list[Action] = []
+    ids = existing_ids(dataset)
+    for row in dataset.tables.get("DuplicateJobs", []):
+        key = row_key("DuplicateJobs", row)
+        if clean(row.get("applied_at")) or not approved(row.get("approval_status")):
+            continue
+        object_type = clean(row.get("object_level")).lower()
+        if object_type not in {"campaign", "adset", "ad"}:
+            continue
+        source = clean(row.get("source_key_or_meta_id"))
+        source_id = ids.get(object_type, {}).get(source) or (
+            placeholder(object_type, source) if _target_is_known_key(dataset, object_type, source) else source
+        )
+        body = _duplicate_body(row, dataset, object_type)
+        depends = []
+        if source_id.startswith("${"):
+            depends.append(_create_action_id(object_type, source))
+        destination = clean(row.get("destination_parent_key_or_meta_id"))
+        destination_object = {"campaign": "account", "adset": "campaign", "ad": "adset"}[object_type]
+        if destination and _target_is_known_key(dataset, destination_object, destination):
+            destination_id = ids.get(destination_object, {}).get(destination) or placeholder(destination_object, destination)
+            if isinstance(destination_id, str) and destination_id.startswith("${"):
+                depends.append(_create_action_id(destination_object, destination))
+        actions.append(
+            Action(
+                action_id=f"080_duplicate_{key}",
+                operation="duplicate",
+                object_type=object_type,
+                object_key=source,
+                command=["GRAPH", "POST", f"{source_id}/copies"],
+                payload={"row": row, "table": "DuplicateJobs"},
+                executor="graph",
+                method="POST",
+                endpoint=f"{source_id}/copies",
+                body=body,
+                id_path="",
+                writeback=[
+                    ("DuplicateJobs", key, "applied_at", "$now"),
+                    ("DuplicateJobs", key, "result_meta_ids", "$result_id"),
+                    ("DuplicateJobs", key, "result", "LIVE_DUPLICATED"),
+                    ("DuplicateJobs", key, "error", ""),
+                ],
+                depends_on=_dedupe_strings(depends),
+                reason=f"Approved duplicate job for {object_type}.",
+                source_table="DuplicateJobs",
+                source_key=key,
+            )
+        )
+    return actions
+
+
 def _meta_prefix(account_row: dict[str, Any]) -> list[str]:
     command = ["meta", "--output", "json", "--no-input"]
     ad_account_id = clean(account_row.get("ad_account_id"))
@@ -727,3 +780,40 @@ def _dedupe_list(values: list[Any]) -> list[Any]:
             seen.add(marker)
             deduped.append(value)
     return deduped
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(value for value in values if value))
+
+
+def _duplicate_body(row: dict[str, Any], dataset: Dataset, object_type: str) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "copy_count": clean(row.get("copy_count")) or "1",
+    }
+    if clean(row.get("deep_copy")):
+        body["deep_copy"] = _truth_text(row.get("deep_copy"))
+    if clean(row.get("status_option")):
+        body["status_option"] = clean(row.get("status_option"))
+    rename_options = {
+        "rename_strategy": clean(row.get("rename_strategy")),
+        "prefix": clean(row.get("name_prefix")),
+        "suffix": clean(row.get("name_suffix")),
+    }
+    rename_options = {key: value for key, value in rename_options.items() if value}
+    if rename_options:
+        body["rename_options"] = rename_options
+    destination = clean(row.get("destination_parent_key_or_meta_id"))
+    if destination:
+        destination_object = {"campaign": "account", "adset": "campaign", "ad": "adset"}[object_type]
+        ids = existing_ids(dataset)
+        destination_id = ids.get(destination_object, {}).get(destination) or (
+            placeholder(destination_object, destination) if _target_is_known_key(dataset, destination_object, destination) else destination
+        )
+        destination_field = {
+            "campaign": "destination_ad_account_id",
+            "adset": "destination_campaign_id",
+            "ad": "destination_adset_id",
+        }[object_type]
+        body[destination_field] = destination_id
+    body = _deep_merge(body, _json_value(row.get("overrides_json"), {}))
+    return body
