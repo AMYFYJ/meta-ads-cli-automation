@@ -31,6 +31,33 @@ class BulkOptimizationTest(unittest.TestCase):
             set_field = next(action for action in bulk_actions if action.source_key == "chg_raise_campaign_budget")
             self.assertEqual(set_field.executor, "cli")
 
+    def test_campaign_bid_strategy_bulk_change_uses_graph_patch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workbook = root / "template.xlsx"
+            ensure_sample_assets(str(root))
+            create_template(str(workbook), with_sample=True)
+            dataset = load_source(str(workbook))
+            dataset.tables["BulkChanges"].append(
+                {
+                    "change_id": "chg_change_bid_strategy",
+                    "operation": "SET_FIELD",
+                    "object_level": "campaign",
+                    "object_key_or_meta_id": "cmp_spring_launch",
+                    "field": "bid_strategy",
+                    "old_value": "LOWEST_COST_WITHOUT_CAP",
+                    "new_value": "LOWEST_COST_WITH_BID_CAP",
+                    "value_json": "",
+                    "approval_status": "APPROVED",
+                }
+            )
+
+            self.assertFalse(has_blocking_errors(validate_dataset(dataset)))
+            action = next(action for action in build_plan(dataset) if action.source_key == "chg_change_bid_strategy")
+
+            self.assertEqual(action.executor, "graph")
+            self.assertEqual(action.body, {"bid_strategy": "LOWEST_COST_WITH_BID_CAP"})
+
     def test_optimization_rules_generate_bulk_changes_from_snapshots(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
