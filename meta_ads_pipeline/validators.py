@@ -71,6 +71,7 @@ def _validate_relationships(dataset: Dataset) -> list[ValidationIssue]:
     campaign_keys = _keys(dataset, "Campaigns")
     adset_keys = _keys(dataset, "AdSets")
     creative_keys = _keys(dataset, "Creatives")
+    targeting_preset_keys = _keys(dataset, "TargetingPresets")
 
     for row in dataset.tables.get("Campaigns", []):
         key = row_key("Campaigns", row)
@@ -80,6 +81,9 @@ def _validate_relationships(dataset: Dataset) -> list[ValidationIssue]:
         key = row_key("AdSets", row)
         if clean(row.get("campaign_key")) not in campaign_keys:
             issues.append(ValidationIssue("ERROR", "AdSets", key, "campaign_key", "No matching Campaigns row."))
+        preset_key = clean(row.get("targeting_preset_key"))
+        if preset_key and preset_key not in targeting_preset_keys:
+            issues.append(ValidationIssue("ERROR", "AdSets", key, "targeting_preset_key", "No matching TargetingPresets row."))
     for row in dataset.tables.get("Creatives", []):
         key = row_key("Creatives", row)
         if clean(row.get("account_key")) not in account_keys:
@@ -101,6 +105,27 @@ def _validate_relationships(dataset: Dataset) -> list[ValidationIssue]:
             issues.append(ValidationIssue("ERROR", "Ads", key, "adset_key", "No matching AdSets row."))
         if clean(row.get("creative_key")) not in creative_keys:
             issues.append(ValidationIssue("ERROR", "Ads", key, "creative_key", "No matching Creatives row."))
+    for row in dataset.tables.get("TargetingPresets", []):
+        key = row_key("TargetingPresets", row)
+        if clean(row.get("account_key")) not in account_keys:
+            issues.append(ValidationIssue("ERROR", "TargetingPresets", key, "account_key", "No matching Accounts row."))
+        for audience_key in _csv_values(row.get("custom_audience_keys")) + _csv_values(row.get("excluded_audience_keys")):
+            if audience_key not in audience_keys:
+                issues.append(ValidationIssue("ERROR", "TargetingPresets", key, "custom_audience_keys", f"No matching Audiences row for {audience_key}."))
+    valid_automation_targets = {
+        "campaign": campaign_keys,
+        "adset": adset_keys,
+        "creative": creative_keys,
+        "ad": _keys(dataset, "Ads"),
+    }
+    for row in dataset.tables.get("AutomationSettings", []):
+        key = row_key("AutomationSettings", row)
+        object_level = clean(row.get("object_level")).lower()
+        object_key = clean(row.get("object_key"))
+        if object_level not in valid_automation_targets:
+            issues.append(ValidationIssue("ERROR", "AutomationSettings", key, "object_level", "Use campaign, adset, creative, or ad."))
+        elif object_key not in valid_automation_targets[object_level]:
+            issues.append(ValidationIssue("ERROR", "AutomationSettings", key, "object_key", f"No matching {object_level} row."))
     return issues
 
 
@@ -133,6 +158,9 @@ def _validate_values(dataset: Dataset) -> list[ValidationIssue]:
         _budget_guard(issues, "AdSets", key, "bid_amount_cents", row.get("bid_amount_cents"))
         _status_guard(issues, "AdSets", key, row.get("desired_status"))
         _date_guard(issues, "AdSets", key, row.get("start_time"), row.get("end_time"))
+        _json_guard(issues, "AdSets", key, "targeting_json", row.get("targeting_json"))
+        _json_guard(issues, "AdSets", key, "targeting_automation_json", row.get("targeting_automation_json"))
+        _json_guard(issues, "AdSets", key, "promoted_object_json", row.get("promoted_object_json"))
         _approval_guard(issues, "AdSets", key, row)
     for row in dataset.tables.get("Creatives", []):
         key = row_key("Creatives", row)
@@ -180,6 +208,17 @@ def _validate_values(dataset: Dataset) -> list[ValidationIssue]:
         _json_guard(issues, "AudienceUploads", key, "data_json", row.get("data_json"))
         if not approved(row.get("approval_status")):
             issues.append(ValidationIssue("INFO", "AudienceUploads", key, "approval_status", "Audience upload is not approved and will not apply."))
+    for row in dataset.tables.get("TargetingPresets", []):
+        key = row_key("TargetingPresets", row)
+        _json_guard(issues, "TargetingPresets", key, "targeting_json", row.get("targeting_json"))
+        if not approved(row.get("approval_status")):
+            issues.append(ValidationIssue("INFO", "TargetingPresets", key, "approval_status", "Targeting preset is not approved and will not be used."))
+    for row in dataset.tables.get("AutomationSettings", []):
+        key = row_key("AutomationSettings", row)
+        _json_guard(issues, "AutomationSettings", key, "targeting_automation_json", row.get("targeting_automation_json"))
+        _json_guard(issues, "AutomationSettings", key, "creative_features_json", row.get("creative_features_json"))
+        if not approved(row.get("approval_status")):
+            issues.append(ValidationIssue("INFO", "AutomationSettings", key, "approval_status", "Automation settings row is not approved and will not be applied."))
     for row in dataset.tables.get("Ads", []):
         key = row_key("Ads", row)
         _status_guard(issues, "Ads", key, row.get("desired_status"))
@@ -290,3 +329,7 @@ def _approval_guard(issues: list[ValidationIssue], table: str, key: str, row: di
 
 def _looks_like_meta_id(value: str) -> bool:
     return value.startswith(("act_", "cmp_", "adset_", "crt_", "ad_", "mock_", "fb_")) or value.isdigit()
+
+
+def _csv_values(value: Any) -> list[str]:
+    return [part.strip() for part in clean(value).split(",") if part.strip()]

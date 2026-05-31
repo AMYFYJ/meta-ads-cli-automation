@@ -239,6 +239,8 @@ def _adset_actions(dataset: Dataset) -> list[Action]:
     actions: list[Action] = []
     campaigns = _index(dataset, "Campaigns")
     accounts = _index(dataset, "Accounts")
+    targeting_presets = _index(dataset, "TargetingPresets")
+    automation_settings = _automation_index(dataset)
     for row in dataset.tables.get("AdSets", []):
         key = row_key("AdSets", row)
         if clean(row.get("meta_adset_id")) or not approved(row.get("approval_status")):
@@ -247,6 +249,29 @@ def _adset_actions(dataset: Dataset) -> list[Action]:
         campaign = campaigns.get(campaign_key, {})
         account = accounts.get(clean(campaign.get("account_key")), {})
         campaign_id = clean(campaign.get("meta_campaign_id")) or placeholder("campaign", campaign_key)
+        automation = automation_settings.get(("adset", key), {})
+        if _adset_requires_graph(row, automation):
+            endpoint = f"{placeholder('account', clean(campaign.get('account_key')))}/adsets"
+            body = _adset_graph_body(row, campaign_id, targeting_presets, automation)
+            actions.append(
+                Action(
+                    action_id=f"020_create_adset_{key}",
+                    operation="create",
+                    object_type="adset",
+                    object_key=key,
+                    command=["GRAPH", "POST", endpoint],
+                    payload={"row": row, "table": "AdSets", "id_column": "meta_adset_id"},
+                    executor="graph",
+                    method="POST",
+                    endpoint=endpoint,
+                    body=body,
+                    depends_on=[f"010_create_campaign_{campaign_key}"] if not clean(campaign.get("meta_campaign_id")) else [],
+                    reason="Approved ad set needs Graph API targeting or automation fields.",
+                    source_table="AdSets",
+                    source_key=key,
+                )
+            )
+            continue
         command = _meta_prefix(account) + ["adset", "create", campaign_id]
         _extend(command, "--name", row.get("name"))
         _extend(command, "--optimization-goal", row.get("optimization_goal"))
@@ -525,3 +550,180 @@ def _json_value(value: Any, default: Any) -> Any:
     if not text:
         return default
     return json.loads(text)
+
+
+def _automation_index(dataset: Dataset) -> dict[tuple[str, str], dict[str, Any]]:
+    rows: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in dataset.tables.get("AutomationSettings", []):
+        if approved(row.get("approval_status")):
+            rows[(clean(row.get("object_level")).lower(), clean(row.get("object_key")))] = row
+    return rows
+
+
+def _adset_requires_graph(row: dict[str, Any], automation: dict[str, Any]) -> bool:
+    graph_fields = [
+        "targeting_preset_key",
+        "targeting_json",
+        "targeting_automation_json",
+        "promoted_object_json",
+    ]
+    if any(clean(row.get(field)) for field in graph_fields):
+        return True
+    if automation:
+        return True
+    targeting_fields = ["regions", "custom_audiences", "excluded_audiences", "interests", "placements"]
+    return any(clean(row.get(field)) for field in targeting_fields)
+
+
+def _adset_graph_body(
+    row: dict[str, Any],
+    campaign_id: str,
+    targeting_presets: dict[str, dict[str, Any]],
+    automation: dict[str, Any],
+) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "campaign_id": campaign_id,
+        "name": clean(row.get("name")),
+        "optimization_goal": clean(row.get("optimization_goal")),
+        "billing_event": clean(row.get("billing_event")),
+        "status": clean(row.get("desired_status")) or "PAUSED",
+    }
+    for column, api_field in [
+        ("daily_budget_cents", "daily_budget"),
+        ("lifetime_budget_cents", "lifetime_budget"),
+        ("bid_amount_cents", "bid_amount"),
+        ("start_time", "start_time"),
+        ("end_time", "end_time"),
+    ]:
+        if clean(row.get(column)):
+            body[api_field] = clean(row.get(column))
+    targeting = _adset_targeting(row, targeting_presets, automation)
+    if targeting:
+        body["targeting"] = targeting
+    targeting_automation = _adset_targeting_automation(row, automation)
+    if targeting_automation:
+        body["targeting_automation"] = targeting_automation
+    promoted_object = _json_value(row.get("promoted_object_json"), {})
+    if not promoted_object and clean(row.get("pixel_dataset_id")):
+        promoted_object = {
+            "pixel_id": clean(row.get("pixel_dataset_id")),
+            "custom_event_type": clean(row.get("pixel_event")) or "PURCHASE",
+        }
+    if promoted_object:
+        body["promoted_object"] = promoted_object
+    return body
+
+
+def _adset_targeting(
+    row: dict[str, Any],
+    targeting_presets: dict[str, dict[str, Any]],
+    automation: dict[str, Any],
+) -> dict[str, Any]:
+    preset = targeting_presets.get(clean(row.get("targeting_preset_key")), {})
+    targeting = _targeting_from_row(preset)
+    targeting = _deep_merge(targeting, _targeting_from_row(row))
+    targeting = _deep_merge(targeting, _json_value(preset.get("targeting_json"), {}))
+    targeting = _deep_merge(targeting, _json_value(row.get("targeting_json"), {}))
+    if _truth_text(automation.get("advantage_placements")):
+        for field in ["publisher_platforms", "facebook_positions", "instagram_positions", "device_platforms"]:
+            targeting.pop(field, None)
+    return targeting
+
+
+def _targeting_from_row(row: dict[str, Any]) -> dict[str, Any]:
+    if not row:
+        return {}
+    targeting: dict[str, Any] = {}
+    countries = _csv_values(row.get("countries"))
+    regions = _csv_values(row.get("regions"))
+    cities = _csv_values(row.get("cities"))
+    zips = _csv_values(row.get("zips"))
+    if countries or regions or cities or zips:
+        geo_locations: dict[str, Any] = {}
+        if countries:
+            geo_locations["countries"] = countries
+        if regions:
+            geo_locations["regions"] = [{"key": item} for item in regions]
+        if cities:
+            geo_locations["cities"] = [{"key": item} for item in cities]
+        if zips:
+            geo_locations["zips"] = [{"key": item} for item in zips]
+        targeting["geo_locations"] = geo_locations
+    for source, target in [
+        ("age_min", "age_min"),
+        ("age_max", "age_max"),
+        ("languages", "locales"),
+        ("publisher_platforms", "publisher_platforms"),
+        ("facebook_positions", "facebook_positions"),
+        ("instagram_positions", "instagram_positions"),
+        ("device_platforms", "device_platforms"),
+    ]:
+        values = _csv_values(row.get(source))
+        if not values:
+            continue
+        targeting[target] = values if len(values) > 1 or source not in {"age_min", "age_max"} else values[0]
+    genders = [gender.lower() for gender in _csv_values(row.get("genders"))]
+    if genders and "all" not in genders:
+        gender_map = {"male": 1, "m": 1, "1": 1, "female": 2, "f": 2, "2": 2}
+        targeting["genders"] = [gender_map[gender] for gender in genders if gender in gender_map]
+    for source, target in [
+        ("interests", "interests"),
+        ("behaviors", "behaviors"),
+        ("custom_audience_keys", "custom_audiences"),
+        ("custom_audiences", "custom_audiences"),
+        ("excluded_audience_keys", "excluded_custom_audiences"),
+        ("excluded_audiences", "excluded_custom_audiences"),
+    ]:
+        values = _csv_values(row.get(source))
+        if values:
+            targeting[target] = [{"id": placeholder("audience", value) if source.endswith("_keys") else value} for value in values]
+    placements = _csv_values(row.get("placements"))
+    if placements and "automatic" not in [placement.lower() for placement in placements]:
+        targeting["publisher_platforms"] = placements
+    return {key: value for key, value in targeting.items() if value not in ("", [], {})}
+
+
+def _adset_targeting_automation(row: dict[str, Any], automation: dict[str, Any]) -> dict[str, Any]:
+    targeting_automation = _json_value(row.get("targeting_automation_json"), {})
+    targeting_automation = _deep_merge(targeting_automation, _json_value(automation.get("targeting_automation_json"), {}))
+    toggle_map = {
+        "advantage_audience": "advantage_audience",
+        "detailed_targeting_expansion": "detailed_targeting",
+        "custom_audience_expansion": "custom_audience",
+    }
+    for source, target in toggle_map.items():
+        value = clean(automation.get(source))
+        if value:
+            targeting_automation[target] = 1 if _truth_text(value) else 0
+    return targeting_automation
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        elif isinstance(value, list) and isinstance(merged.get(key), list):
+            merged[key] = _dedupe_list(merged[key] + value)
+        elif value not in ("", None, [], {}):
+            merged[key] = value
+    return merged
+
+
+def _csv_values(value: Any) -> list[str]:
+    return [part.strip() for part in clean(value).split(",") if part.strip()]
+
+
+def _truth_text(value: Any) -> bool:
+    return clean(value).lower() in {"1", "true", "yes", "y", "on", "enabled"}
+
+
+def _dedupe_list(values: list[Any]) -> list[Any]:
+    deduped: list[Any] = []
+    seen: set[str] = set()
+    for value in values:
+        marker = json.dumps(value, sort_keys=True) if isinstance(value, (dict, list)) else str(value)
+        if marker not in seen:
+            seen.add(marker)
+            deduped.append(value)
+    return deduped
