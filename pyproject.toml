@@ -1,0 +1,21 @@
+[project]
+name = "meta-ads-workflow"
+version = "0.1.0"
+description = "Workbook/database driven automation for Meta Ads CLI workflows."
+requires-python = ">=3.11"
+dependencies = [
+  "openpyxl>=3.1",
+  "Pillow>=10.0",
+  "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[project.scripts]
+meta-ads-pipeline = "meta_ads_pipeline.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
