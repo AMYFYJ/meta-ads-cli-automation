@@ -12,7 +12,7 @@ from typing import Any
 
 from .models import Action, ActionResult, Dataset
 from .planner import existing_ids
-from .schema import OBJECT_CONFIG, TABLES, UPDATABLE_FIELDS, clean
+from .schema import OBJECT_CONFIG, TABLES, clean
 
 
 def utc_now() -> str:
@@ -141,6 +141,8 @@ class LiveMetaCliAdapter:
     def apply(self, action: Action, context: dict[str, dict[str, str]]) -> ActionResult:
         if action.dry_run_only:
             return ActionResult(action=action, ok=False, message=action.reason)
+        if action.executor == "graph":
+            return self._call_graph(action, context)
         if action.object_type == "account" and action.operation == "create":
             return self._create_ad_account(action, context)
         command = [_resolve_any(token, context) for token in action.command]
@@ -207,8 +209,41 @@ class LiveMetaCliAdapter:
             updates=updates,
         )
 
+    def _call_graph(self, action: Action, context: dict[str, dict[str, str]]) -> ActionResult:
+        token = os.environ.get("ACCESS_TOKEN")
+        if not token:
+            return ActionResult(action=action, ok=False, message="ACCESS_TOKEN is required for Graph API actions.")
+        request = build_graph_request(action, context, token=token)
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                response_body = response.read().decode("utf-8")
+        except Exception as exc:  # noqa: BLE001 - keep Meta/API failures visible in PublishLog.
+            return ActionResult(action=action, ok=False, message="Graph API action failed.", stderr=str(exc))
+
+        meta_id = _extract_path(response_body, action.id_path)
+        ok = bool(meta_id) or action.operation in {"update", "delete", "upload"}
+        if ok and meta_id:
+            context.setdefault(action.object_type, {})[action.object_key] = meta_id
+        updates = self._updates_for_live_result(action, ok, meta_id, "")
+        return ActionResult(
+            action=action,
+            ok=ok,
+            meta_id=meta_id,
+            message="Graph API action succeeded." if ok else "Graph API response did not include an ID.",
+            stdout=response_body,
+            updates=updates,
+        )
+
     def _updates_for_live_result(self, action: Action, ok: bool, meta_id: str, error: str) -> list[tuple[str, str, str, Any]]:
         updates: list[tuple[str, str, str, Any]] = []
+        if action.writeback and ok:
+            for table_name, key, column, value in action.writeback:
+                if isinstance(value, str):
+                    resolved_value = value.replace("${result:id}", meta_id).replace("$result_id", meta_id)
+                    resolved_value = resolve_templates(resolved_value, {action.object_type: {action.object_key: meta_id}})
+                else:
+                    resolved_value = value
+                updates.append((table_name, key, column, resolved_value))
         if action.operation == "create":
             table = action.payload.get("table")
             id_column = action.payload.get("id_column")
@@ -266,6 +301,22 @@ def _resolve_any(value: str, context: dict[str, dict[str, str]]) -> str:
     return value
 
 
+def resolve_templates(value: Any, context: dict[str, dict[str, str]]) -> Any:
+    if isinstance(value, str):
+        if value.startswith("${") and value.endswith("}"):
+            return _resolve_placeholder(value, context)
+        result = value
+        for object_type, values in context.items():
+            for key, meta_id in values.items():
+                result = result.replace(f"${{{object_type}:{key}}}", meta_id)
+        return result
+    if isinstance(value, list):
+        return [resolve_templates(item, context) for item in value]
+    if isinstance(value, dict):
+        return {key: resolve_templates(item, context) for key, item in value.items()}
+    return value
+
+
 def _resolve_placeholder(token: str, context: dict[str, dict[str, str]]) -> str:
     inner = token[2:-1]
     object_type, _, key = inner.partition(":")
@@ -290,6 +341,61 @@ def _extract_id(stdout: str) -> str:
             if isinstance(first, dict) and "id" in first:
                 return str(first["id"])
     return ""
+
+
+def _extract_path(stdout: str, path: str) -> str:
+    text = stdout.strip()
+    if not text:
+        return ""
+    try:
+        current: Any = json.loads(text)
+    except json.JSONDecodeError:
+        return ""
+    for part in path.split("."):
+        if not part:
+            continue
+        if isinstance(current, dict):
+            current = current.get(part)
+        elif isinstance(current, list):
+            try:
+                current = current[int(part)]
+            except (ValueError, IndexError):
+                return ""
+        else:
+            return ""
+    return "" if current is None else str(current)
+
+
+def build_graph_request(action: Action, context: dict[str, dict[str, str]], token: str) -> urllib.request.Request:
+    version = os.environ.get("META_API_VERSION", "v21.0")
+    endpoint = str(resolve_templates(action.endpoint, context)).lstrip("/")
+    params = dict(resolve_templates(action.params, context))
+    body = dict(resolve_templates(action.body, context))
+    params["access_token"] = token
+    method = action.method.upper()
+    query = urllib.parse.urlencode(_json_ready(params), doseq=True)
+    url = f"https://graph.facebook.com/{version}/{endpoint}"
+    if method == "GET":
+        url = f"{url}?{query}" if query else url
+        return urllib.request.Request(url, method=method)
+    data = urllib.parse.urlencode(_json_ready(body | {"access_token": token}), doseq=True).encode("utf-8")
+    if method == "DELETE" and body:
+        return urllib.request.Request(f"{url}?{query}" if query else url, data=data, method=method)
+    if method == "DELETE":
+        return urllib.request.Request(f"{url}?{query}" if query else url, method=method)
+    return urllib.request.Request(f"{url}?{query}" if query and method not in {"POST", "PUT"} else url, data=data, method=method)
+
+
+def _json_ready(values: dict[str, Any]) -> dict[str, Any]:
+    ready: dict[str, Any] = {}
+    for key, value in values.items():
+        if value in (None, ""):
+            continue
+        if isinstance(value, (dict, list)):
+            ready[key] = json.dumps(value, separators=(",", ":"))
+        else:
+            ready[key] = value
+    return ready
 
 
 def _row_exists(dataset: Dataset, table_name: str, key_column: str, key: str) -> bool:

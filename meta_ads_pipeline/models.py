@@ -39,6 +39,13 @@ class Action:
     object_key: str
     command: list[str]
     payload: dict[str, Any]
+    executor: str = "cli"
+    method: str = "POST"
+    endpoint: str = ""
+    params: dict[str, Any] = field(default_factory=dict)
+    body: dict[str, Any] = field(default_factory=dict)
+    id_path: str = "id"
+    writeback: list[tuple[str, str, str, Any]] = field(default_factory=list)
     depends_on: list[str] = field(default_factory=list)
     reason: str = ""
     source_table: str = ""
@@ -56,6 +63,13 @@ class Action:
             "source_table": self.source_table,
             "source_key": self.source_key,
             "dry_run_only": self.dry_run_only,
+            "executor": self.executor,
+            "method": self.method,
+            "endpoint": self.endpoint,
+            "params": self.params,
+            "body": self.body,
+            "id_path": self.id_path,
+            "writeback": self.writeback,
             "command": self.command,
             "payload": self.payload,
         }
