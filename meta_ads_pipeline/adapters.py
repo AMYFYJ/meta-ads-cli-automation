@@ -47,6 +47,8 @@ class MockMetaAdapter:
             return ActionResult(action=action, ok=False, message=action.reason)
         if action.operation == "create":
             return self._create(action, context)
+        if action.operation == "upload":
+            return self._upload(action, context)
         if action.operation == "update":
             return self._update(action, context)
         return ActionResult(action=action, ok=False, message=f"Unsupported operation: {action.operation}")
@@ -130,6 +132,32 @@ class MockMetaAdapter:
             meta_id=meta_id,
             message=f"Mock updated {object_type} {key_or_id}: {field}={value}.",
             stdout=json.dumps({"id": meta_id, "field": field, "value": value, "mock": True}),
+            updates=updates,
+        )
+
+    def _upload(self, action: Action, context: dict[str, dict[str, str]]) -> ActionResult:
+        meta_id = context.get(action.object_type, {}).get(action.object_key) or action.object_key
+        uploaded = len(action.body.get("payload", {}).get("data", []))
+        self.state.setdefault("objects", {}).setdefault(action.object_type, {}).setdefault(meta_id, {})
+        self.state["objects"][action.object_type][meta_id].setdefault("uploads", []).append(
+            {
+                "upload_key": action.source_key,
+                "operation": action.body.get("operation", "ADD"),
+                "rows": uploaded,
+                "updated_at": utc_now(),
+            }
+        )
+        updates = [
+            ("AudienceUploads", action.source_key, "applied_at", utc_now()),
+            ("AudienceUploads", action.source_key, "result", f"MOCK_UPLOADED_{uploaded}_ROWS"),
+            ("AudienceUploads", action.source_key, "error", ""),
+        ]
+        return ActionResult(
+            action=action,
+            ok=True,
+            meta_id=meta_id,
+            message=f"Mock uploaded {uploaded} audience rows.",
+            stdout=json.dumps({"id": meta_id, "rows": uploaded, "mock": True}),
             updates=updates,
         )
 
@@ -239,7 +267,7 @@ class LiveMetaCliAdapter:
         if action.writeback and ok:
             for table_name, key, column, value in action.writeback:
                 if isinstance(value, str):
-                    resolved_value = value.replace("${result:id}", meta_id).replace("$result_id", meta_id)
+                    resolved_value = value.replace("${result:id}", meta_id).replace("$result_id", meta_id).replace("$now", utc_now())
                     resolved_value = resolve_templates(resolved_value, {action.object_type: {action.object_key: meta_id}})
                 else:
                     resolved_value = value
@@ -286,6 +314,7 @@ class LiveMetaCliAdapter:
 def _mock_id(object_type: str, key: str) -> str:
     prefix = {
         "account": "act_mock",
+        "audience": "mock_aud",
         "campaign": "mock_cmp",
         "adset": "mock_adset",
         "creative": "mock_crt",
@@ -344,6 +373,8 @@ def _extract_id(stdout: str) -> str:
 
 
 def _extract_path(stdout: str, path: str) -> str:
+    if not path:
+        return ""
     text = stdout.strip()
     if not text:
         return ""

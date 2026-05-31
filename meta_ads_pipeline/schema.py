@@ -150,6 +150,51 @@ TABLES: dict[str, TableSpec] = {
         ],
         required=["ad_key", "adset_key", "creative_key", "name", "desired_status"],
     ),
+    "Audiences": TableSpec(
+        name="Audiences",
+        key_column="audience_key",
+        columns=[
+            "audience_key",
+            "account_key",
+            "meta_audience_id",
+            "name",
+            "audience_type",
+            "subtype",
+            "description",
+            "source_audience_key",
+            "pixel_dataset_id",
+            "retention_days",
+            "countries",
+            "lookalike_ratio",
+            "targeting_json",
+            "rule_json",
+            "lookalike_spec_json",
+            "customer_file_source",
+            "approval_status",
+            "last_result",
+            "last_error",
+            "updated_at",
+        ],
+        required=["audience_key", "account_key", "name", "audience_type", "approval_status"],
+    ),
+    "AudienceUploads": TableSpec(
+        name="AudienceUploads",
+        key_column="upload_key",
+        columns=[
+            "upload_key",
+            "audience_key",
+            "operation",
+            "schema",
+            "data_path",
+            "data_json",
+            "hash_type",
+            "approval_status",
+            "applied_at",
+            "result",
+            "error",
+        ],
+        required=["upload_key", "audience_key", "operation", "schema", "approval_status"],
+    ),
     "BulkChanges": TableSpec(
         name="BulkChanges",
         key_column="change_id",
@@ -243,11 +288,12 @@ TABLES: dict[str, TableSpec] = {
 }
 
 
-CREATE_TABLES = ["Accounts", "Campaigns", "AdSets", "Creatives", "Ads"]
+CREATE_TABLES = ["Accounts", "Audiences", "Campaigns", "AdSets", "Creatives", "Ads"]
 CONTROL_TABLES = ["BulkChanges", "PerformanceSnapshots", "PublishLog", "ValidationErrors"]
 
 OBJECT_CONFIG = {
     "account": ("Accounts", "account_key", "ad_account_id"),
+    "audience": ("Audiences", "audience_key", "meta_audience_id"),
     "campaign": ("Campaigns", "campaign_key", "meta_campaign_id"),
     "adset": ("AdSets", "adset_key", "meta_adset_id"),
     "creative": ("Creatives", "creative_key", "meta_creative_id"),
@@ -288,6 +334,13 @@ UPDATABLE_FIELDS = {
         "status": "--status",
         "desired_status": "--status",
     },
+    "audience": {
+        "name": "name",
+        "description": "description",
+        "retention_days": "retention_days",
+        "rule_json": "rule",
+        "targeting_json": "targeting",
+    },
 }
 
 OBJECTIVES = {
@@ -301,6 +354,8 @@ OBJECTIVES = {
 
 STATUSES = {"ACTIVE", "PAUSED", "DELETED", "ARCHIVED"}
 BUDGET_MODES = {"CBO", "ABO"}
+AUDIENCE_TYPES = {"CUSTOM", "LOOKALIKE", "WEBSITE", "SAVED"}
+AUDIENCE_UPLOAD_OPERATIONS = {"ADD", "REMOVE", "REPLACE"}
 
 
 def clean(value: Any) -> str:

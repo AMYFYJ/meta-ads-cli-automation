@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import json
 from pathlib import Path
 from typing import Any
 
@@ -19,11 +21,101 @@ from .schema import (
 def build_plan(dataset: Dataset) -> list[Action]:
     actions: list[Action] = []
     actions.extend(_account_actions(dataset))
+    actions.extend(_audience_actions(dataset))
+    actions.extend(_audience_upload_actions(dataset))
     actions.extend(_campaign_actions(dataset))
     actions.extend(_adset_actions(dataset))
     actions.extend(_creative_actions(dataset))
     actions.extend(_ad_actions(dataset))
     actions.extend(_bulk_change_actions(dataset))
+    return actions
+
+
+def _audience_actions(dataset: Dataset) -> list[Action]:
+    actions: list[Action] = []
+    accounts = _index(dataset, "Accounts")
+    audiences = _index(dataset, "Audiences")
+    for row in dataset.tables.get("Audiences", []):
+        key = row_key("Audiences", row)
+        if clean(row.get("meta_audience_id")) or not approved(row.get("approval_status")):
+            continue
+        account_key = clean(row.get("account_key"))
+        account = accounts.get(account_key, {})
+        audience_type = clean(row.get("audience_type")).upper()
+        endpoint = f"{placeholder('account', account_key)}/saved_audiences" if audience_type == "SAVED" else f"{placeholder('account', account_key)}/customaudiences"
+        body = _audience_body(row, audiences)
+        depends = []
+        if _needs_account_create(account):
+            depends.append(f"001_create_account_{account_key}")
+        source_key = clean(row.get("source_audience_key"))
+        if source_key and not clean(audiences.get(source_key, {}).get("meta_audience_id")):
+            depends.append(f"015_create_audience_{source_key}")
+        actions.append(
+            Action(
+                action_id=f"015_create_audience_{key}",
+                operation="create",
+                object_type="audience",
+                object_key=key,
+                command=["GRAPH", "POST", endpoint],
+                payload={"row": row, "table": "Audiences", "id_column": "meta_audience_id"},
+                executor="graph",
+                method="POST",
+                endpoint=endpoint,
+                body=body,
+                depends_on=depends,
+                reason=f"Approved {audience_type.lower()} audience has no Meta audience ID.",
+                source_table="Audiences",
+                source_key=key,
+            )
+        )
+    return actions
+
+
+def _audience_upload_actions(dataset: Dataset) -> list[Action]:
+    actions: list[Action] = []
+    audiences = _index(dataset, "Audiences")
+    base_dir = source_dir(dataset)
+    for row in dataset.tables.get("AudienceUploads", []):
+        key = row_key("AudienceUploads", row)
+        if clean(row.get("applied_at")) or not approved(row.get("approval_status")):
+            continue
+        audience_key = clean(row.get("audience_key"))
+        audience = audiences.get(audience_key, {})
+        audience_id = clean(audience.get("meta_audience_id")) or placeholder("audience", audience_key)
+        body = {
+            "operation": clean(row.get("operation")).upper() or "ADD",
+            "payload": {
+                "schema": [part.strip() for part in clean(row.get("schema")).split(",") if part.strip()],
+                "data": _audience_upload_data(row, base_dir),
+            },
+        }
+        depends = []
+        if not clean(audience.get("meta_audience_id")):
+            depends.append(f"015_create_audience_{audience_key}")
+        actions.append(
+            Action(
+                action_id=f"016_upload_audience_{key}",
+                operation="upload",
+                object_type="audience",
+                object_key=audience_key,
+                command=["GRAPH", "POST", f"{audience_id}/users"],
+                payload={"row": row, "table": "AudienceUploads"},
+                executor="graph",
+                method="POST",
+                endpoint=f"{audience_id}/users",
+                body=body,
+                id_path="",
+                writeback=[
+                    ("AudienceUploads", key, "applied_at", "$now"),
+                    ("AudienceUploads", key, "result", "LIVE_UPLOADED"),
+                    ("AudienceUploads", key, "error", ""),
+                ],
+                depends_on=depends,
+                reason="Approved audience upload has not been applied.",
+                source_table="AudienceUploads",
+                source_key=key,
+            )
+        )
     return actions
 
 
@@ -336,6 +428,9 @@ def _meta_prefix_for_object(dataset: Dataset, object_type: str, key_or_id: str) 
     if object_type == "creative":
         creative = _index(dataset, "Creatives").get(key_or_id, {})
         return _meta_prefix(accounts.get(clean(creative.get("account_key")), {}))
+    if object_type == "audience":
+        audience = _index(dataset, "Audiences").get(key_or_id, {})
+        return _meta_prefix(accounts.get(clean(audience.get("account_key")), {}))
     if object_type == "ad":
         ad = _index(dataset, "Ads").get(key_or_id, {})
         adset = _index(dataset, "AdSets").get(clean(ad.get("adset_key")), {})
@@ -367,9 +462,66 @@ def _target_is_known_key(dataset: Dataset, object_type: str, key: str) -> bool:
 def _create_action_id(object_type: str, key: str) -> str:
     prefixes = {
         "account": "001_create_account_",
+        "audience": "015_create_audience_",
         "campaign": "010_create_campaign_",
         "adset": "020_create_adset_",
         "creative": "030_create_creative_",
         "ad": "040_create_ad_",
     }
     return f"{prefixes[object_type]}{key}"
+
+
+def _audience_body(row: dict[str, Any], audiences: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    audience_type = clean(row.get("audience_type")).upper()
+    body: dict[str, Any] = {
+        "name": clean(row.get("name")),
+        "description": clean(row.get("description")),
+    }
+    if audience_type == "SAVED":
+        body["targeting"] = _json_value(row.get("targeting_json"), {})
+        return body
+    subtype = clean(row.get("subtype")).upper() or ("LOOKALIKE" if audience_type == "LOOKALIKE" else "CUSTOM")
+    if audience_type == "WEBSITE":
+        subtype = "WEBSITE"
+    body["subtype"] = subtype
+    if clean(row.get("customer_file_source")):
+        body["customer_file_source"] = clean(row.get("customer_file_source"))
+    if clean(row.get("retention_days")):
+        body["retention_days"] = clean(row.get("retention_days"))
+    if clean(row.get("rule_json")):
+        body["rule"] = _json_value(row.get("rule_json"), {})
+    if audience_type == "LOOKALIKE":
+        source_key = clean(row.get("source_audience_key"))
+        source_id = clean(audiences.get(source_key, {}).get("meta_audience_id")) or placeholder("audience", source_key)
+        lookalike_spec = _json_value(row.get("lookalike_spec_json"), {})
+        if not lookalike_spec:
+            lookalike_spec = {
+                "type": "similarity",
+                "ratio": float(clean(row.get("lookalike_ratio")) or "0.01"),
+                "country": clean(row.get("countries")) or "US",
+            }
+        body["origin_audience_id"] = source_id
+        body["lookalike_spec"] = lookalike_spec
+    return body
+
+
+def _audience_upload_data(row: dict[str, Any], base_dir: Path) -> list[list[str]]:
+    if clean(row.get("data_json")):
+        loaded = _json_value(row.get("data_json"), [])
+        return loaded if isinstance(loaded, list) else []
+    data_path = Path(clean(row.get("data_path")))
+    if not data_path.is_absolute():
+        data_path = base_dir / data_path
+    with data_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.reader(handle)
+        rows = list(reader)
+    if rows and [cell.strip().upper() for cell in rows[0]] == [part.strip().upper() for part in clean(row.get("schema")).split(",") if part.strip()]:
+        rows = rows[1:]
+    return rows
+
+
+def _json_value(value: Any, default: Any) -> Any:
+    text = clean(value)
+    if not text:
+        return default
+    return json.loads(text)

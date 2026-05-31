@@ -6,6 +6,8 @@ from typing import Any
 
 from .models import Dataset, ValidationIssue
 from .schema import (
+    AUDIENCE_TYPES,
+    AUDIENCE_UPLOAD_OPERATIONS,
     BUDGET_MODES,
     CREATE_TABLES,
     OBJECT_CONFIG,
@@ -65,6 +67,7 @@ def _validate_uniqueness(dataset: Dataset) -> list[ValidationIssue]:
 def _validate_relationships(dataset: Dataset) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     account_keys = _keys(dataset, "Accounts")
+    audience_keys = _keys(dataset, "Audiences")
     campaign_keys = _keys(dataset, "Campaigns")
     adset_keys = _keys(dataset, "AdSets")
     creative_keys = _keys(dataset, "Creatives")
@@ -81,6 +84,17 @@ def _validate_relationships(dataset: Dataset) -> list[ValidationIssue]:
         key = row_key("Creatives", row)
         if clean(row.get("account_key")) not in account_keys:
             issues.append(ValidationIssue("ERROR", "Creatives", key, "account_key", "No matching Accounts row."))
+    for row in dataset.tables.get("Audiences", []):
+        key = row_key("Audiences", row)
+        if clean(row.get("account_key")) not in account_keys:
+            issues.append(ValidationIssue("ERROR", "Audiences", key, "account_key", "No matching Accounts row."))
+        source_key = clean(row.get("source_audience_key"))
+        if source_key and source_key not in audience_keys:
+            issues.append(ValidationIssue("ERROR", "Audiences", key, "source_audience_key", "No matching source Audiences row."))
+    for row in dataset.tables.get("AudienceUploads", []):
+        key = row_key("AudienceUploads", row)
+        if clean(row.get("audience_key")) not in audience_keys:
+            issues.append(ValidationIssue("ERROR", "AudienceUploads", key, "audience_key", "No matching Audiences row."))
     for row in dataset.tables.get("Ads", []):
         key = row_key("Ads", row)
         if clean(row.get("adset_key")) not in adset_keys:
@@ -133,6 +147,39 @@ def _validate_values(dataset: Dataset) -> list[ValidationIssue]:
                 path = source_dir / path
             if not path.exists():
                 issues.append(ValidationIssue("ERROR", "Creatives", key, "asset_path_or_url", f"Asset does not exist: {path}."))
+    for row in dataset.tables.get("Audiences", []):
+        key = row_key("Audiences", row)
+        audience_type = clean(row.get("audience_type")).upper()
+        if audience_type and audience_type not in AUDIENCE_TYPES:
+            issues.append(ValidationIssue("ERROR", "Audiences", key, "audience_type", f"Unsupported audience type: {audience_type}."))
+        if audience_type == "LOOKALIKE" and is_blank(row.get("source_audience_key")):
+            issues.append(ValidationIssue("ERROR", "Audiences", key, "source_audience_key", "Lookalike audiences require source_audience_key."))
+        if audience_type == "WEBSITE" and is_blank(row.get("rule_json")):
+            issues.append(ValidationIssue("ERROR", "Audiences", key, "rule_json", "Website audiences require rule_json."))
+        ratio = to_int(row.get("lookalike_ratio"))
+        if not is_blank(row.get("lookalike_ratio")) and ratio is None:
+            issues.append(ValidationIssue("ERROR", "Audiences", key, "lookalike_ratio", "Lookalike ratio must be numeric."))
+        _json_guard(issues, "Audiences", key, "targeting_json", row.get("targeting_json"))
+        _json_guard(issues, "Audiences", key, "rule_json", row.get("rule_json"))
+        _json_guard(issues, "Audiences", key, "lookalike_spec_json", row.get("lookalike_spec_json"))
+        _approval_guard(issues, "Audiences", key, row)
+    for row in dataset.tables.get("AudienceUploads", []):
+        key = row_key("AudienceUploads", row)
+        operation = clean(row.get("operation")).upper()
+        if operation and operation not in AUDIENCE_UPLOAD_OPERATIONS:
+            issues.append(ValidationIssue("ERROR", "AudienceUploads", key, "operation", "Use ADD, REMOVE, or REPLACE."))
+        data_path = clean(row.get("data_path"))
+        if data_path:
+            path = Path(data_path)
+            if not path.is_absolute():
+                path = source_dir / path
+            if not path.exists():
+                issues.append(ValidationIssue("ERROR", "AudienceUploads", key, "data_path", f"Upload file does not exist: {path}."))
+        if not data_path and is_blank(row.get("data_json")):
+            issues.append(ValidationIssue("ERROR", "AudienceUploads", key, "data_json", "Provide data_path or data_json."))
+        _json_guard(issues, "AudienceUploads", key, "data_json", row.get("data_json"))
+        if not approved(row.get("approval_status")):
+            issues.append(ValidationIssue("INFO", "AudienceUploads", key, "approval_status", "Audience upload is not approved and will not apply."))
     for row in dataset.tables.get("Ads", []):
         key = row_key("Ads", row)
         _status_guard(issues, "Ads", key, row.get("desired_status"))
@@ -192,6 +239,18 @@ def _budget_guard(issues: list[ValidationIssue], table: str, key: str, field: st
     parsed = to_int(value)
     if parsed is None or parsed < 0:
         issues.append(ValidationIssue("ERROR", table, key, field, "Budget/bid values must be non-negative integer minor units, e.g. cents."))
+
+
+def _json_guard(issues: list[ValidationIssue], table: str, key: str, field: str, value: Any) -> None:
+    text = clean(value)
+    if not text:
+        return
+    import json
+
+    try:
+        json.loads(text)
+    except json.JSONDecodeError:
+        issues.append(ValidationIssue("ERROR", table, key, field, "Value must be valid JSON."))
 
 
 def _status_guard(issues: list[ValidationIssue], table: str, key: str, value: Any) -> None:

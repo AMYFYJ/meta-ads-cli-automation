@@ -182,6 +182,13 @@ def _add_lookup_sheet(wb: Workbook) -> None:
         ("approval_status", "DRAFT"),
         ("approval_status", "APPROVED"),
         ("approval_status", "REJECTED"),
+        ("audience_type", "CUSTOM"),
+        ("audience_type", "LOOKALIKE"),
+        ("audience_type", "WEBSITE"),
+        ("audience_type", "SAVED"),
+        ("audience_upload_operation", "ADD"),
+        ("audience_upload_operation", "REMOVE"),
+        ("audience_upload_operation", "REPLACE"),
         ("cta", "SHOP_NOW"),
         ("cta", "LEARN_MORE"),
         ("cta", "SIGN_UP"),
@@ -319,6 +326,16 @@ def sample_tables(base_dir: Path) -> dict[str, list[dict[str, Any]]]:
     asset_dir = base_dir / "assets"
     image_path = asset_dir / "spring_launch_hero.png"
     alt_image_path = asset_dir / "retargeting_offer.png"
+    upload_dir = base_dir / "audience_uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    vip_upload_path = upload_dir / "vip_buyers.csv"
+    if not vip_upload_path.exists():
+        vip_upload_path.write_text(
+            "EMAIL,FN,LN\n"
+            "hashed_email_1,hashed_first_1,hashed_last_1\n"
+            "hashed_email_2,hashed_first_2,hashed_last_2\n",
+            encoding="utf-8",
+        )
     return {
         "Accounts": [
             {
@@ -482,6 +499,96 @@ def sample_tables(base_dir: Path) -> dict[str, list[dict[str, Any]]]:
                 "launch_batch": "demo_batch_001",
                 "approval_status": "APPROVED",
             },
+        ],
+        "Audiences": [
+            {
+                "audience_key": "aud_vip_buyers",
+                "account_key": "acct_demo_us",
+                "meta_audience_id": "",
+                "name": "VIP Buyers Seed",
+                "audience_type": "CUSTOM",
+                "subtype": "CUSTOM",
+                "description": "Seed audience for customers uploaded from CRM.",
+                "source_audience_key": "",
+                "pixel_dataset_id": "",
+                "retention_days": "",
+                "countries": "",
+                "lookalike_ratio": "",
+                "targeting_json": "",
+                "rule_json": "",
+                "lookalike_spec_json": "",
+                "customer_file_source": "USER_PROVIDED_ONLY",
+                "approval_status": "APPROVED",
+            },
+            {
+                "audience_key": "aud_vip_lookalike_us",
+                "account_key": "acct_demo_us",
+                "meta_audience_id": "",
+                "name": "VIP Buyers Lookalike 1% US",
+                "audience_type": "LOOKALIKE",
+                "subtype": "LOOKALIKE",
+                "description": "US lookalike based on VIP buyers seed.",
+                "source_audience_key": "aud_vip_buyers",
+                "pixel_dataset_id": "",
+                "retention_days": "",
+                "countries": "US",
+                "lookalike_ratio": "0.01",
+                "targeting_json": "",
+                "rule_json": "",
+                "lookalike_spec_json": "{\"type\":\"similarity\",\"ratio\":0.01,\"country\":\"US\"}",
+                "customer_file_source": "",
+                "approval_status": "APPROVED",
+            },
+            {
+                "audience_key": "aud_site_visitors_30d",
+                "account_key": "acct_demo_us",
+                "meta_audience_id": "",
+                "name": "Site Visitors 30D",
+                "audience_type": "WEBSITE",
+                "subtype": "WEBSITE",
+                "description": "Recent website visitors from the demo pixel.",
+                "source_audience_key": "",
+                "pixel_dataset_id": "998877665544",
+                "retention_days": "30",
+                "countries": "",
+                "lookalike_ratio": "",
+                "targeting_json": "",
+                "rule_json": "{\"inclusions\":{\"operator\":\"or\",\"rules\":[{\"event_sources\":[{\"id\":\"998877665544\",\"type\":\"pixel\"}],\"retention_seconds\":2592000,\"filter\":{\"operator\":\"and\",\"filters\":[{\"field\":\"event\",\"operator\":\"eq\",\"value\":\"PageView\"}]}}]}}",
+                "lookalike_spec_json": "",
+                "customer_file_source": "",
+                "approval_status": "APPROVED",
+            },
+            {
+                "audience_key": "aud_saved_broad_us",
+                "account_key": "acct_demo_us",
+                "meta_audience_id": "",
+                "name": "Saved Broad US 25-54",
+                "audience_type": "SAVED",
+                "subtype": "",
+                "description": "Reusable broad saved audience.",
+                "source_audience_key": "",
+                "pixel_dataset_id": "",
+                "retention_days": "",
+                "countries": "US",
+                "lookalike_ratio": "",
+                "targeting_json": "{\"geo_locations\":{\"countries\":[\"US\"]},\"age_min\":25,\"age_max\":54}",
+                "rule_json": "",
+                "lookalike_spec_json": "",
+                "customer_file_source": "",
+                "approval_status": "APPROVED",
+            },
+        ],
+        "AudienceUploads": [
+            {
+                "upload_key": "upload_vip_buyers_seed",
+                "audience_key": "aud_vip_buyers",
+                "operation": "ADD",
+                "schema": "EMAIL,FN,LN",
+                "data_path": os.path.relpath(vip_upload_path, base_dir),
+                "data_json": "",
+                "hash_type": "HASHED",
+                "approval_status": "APPROVED",
+            }
         ],
         "BulkChanges": [
             {
