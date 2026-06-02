@@ -13,9 +13,17 @@ dependencies = [
 dev = [
   "pytest>=8.0",
 ]
+# Live mode drives Meta's official CLI, which requires Python 3.12+. The marker keeps
+# `pip install` working (mock-only) on 3.11; the dependency is pulled only on 3.12+.
+live = [
+  "meta-ads>=0.1; python_version>='3.12'",
+]
 
 [project.scripts]
 meta-ads-pipeline = "meta_ads_pipeline.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "live: requires real Meta credentials (skipped unless RUN_LIVE_TESTS=1 and ACCESS_TOKEN set)",
+]

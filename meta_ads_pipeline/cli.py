@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
 
+from .adapters import is_sandbox_account, resolve_account
 from .assets import ensure_sample_assets
+from .doctor import run_doctor
 from .executor import execute_actions, validation_rows
 from .insights import generate_mock_insights, get_live_insights
 from .optimization import generate_optimization_changes
@@ -53,6 +56,8 @@ def build_parser() -> argparse.ArgumentParser:
     apply.add_argument("--out-source", required=True)
     apply.add_argument("--plan-out", default="")
     apply.add_argument("--continue-on-error", action="store_true")
+    apply.add_argument("--account", default="", help="Override ad account id (act_...) for this run.")
+    apply.add_argument("--require-sandbox", action="store_true", help="Refuse live apply unless the target is the sandbox account.")
     apply.add_argument("--yes", action="store_true", help="Confirm execution.")
     apply.set_defaults(func=cmd_apply)
 
@@ -77,6 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
     insights.add_argument("--date-preset", default="last_7d")
     insights.add_argument("--level", default="ad")
     insights.add_argument("--breakdown", action="append", default=[])
+    insights.add_argument("--account", default="", help="Override ad account id (act_...) for live insights.")
     insights.set_defaults(func=cmd_insights)
 
     optimize = sub.add_parser("optimize", help="Generate approved bulk changes from OptimizationRules and PerformanceSnapshots.")
@@ -87,6 +93,12 @@ def build_parser() -> argparse.ArgumentParser:
     demo = sub.add_parser("demo", help="Run the complete team demo workflow in mock mode.")
     demo.add_argument("--workdir", default="outputs/demo")
     demo.set_defaults(func=cmd_demo)
+
+    doctor = sub.add_parser("doctor", help="Preflight checks for live/sandbox readiness.")
+    doctor.add_argument("--live", action="store_true", help="Also run a read-only token check against Meta.")
+    doctor.add_argument("--account", default="", help="Override ad account id (act_...) for the check.")
+    doctor.add_argument("--json", action="store_true", help="Emit a machine-readable JSON report.")
+    doctor.set_defaults(func=cmd_doctor)
     return parser
 
 
@@ -130,6 +142,16 @@ def cmd_apply(args: argparse.Namespace) -> int:
     if not args.yes:
         print("Refusing to apply without --yes. Run plan first, then re-run apply with --yes.", file=sys.stderr)
         return 2
+    if args.mode == "live":
+        target_account = resolve_account(args.account)
+        require_sandbox = args.require_sandbox or os.environ.get("META_REQUIRE_SANDBOX", "").lower() in {"1", "true", "yes", "on"}
+        if require_sandbox and not is_sandbox_account(target_account):
+            print(
+                f"Refusing live apply: target account '{target_account or '(unset)'}' is not the sandbox account. "
+                "Set SANDBOX_AD_ACCOUNT_ID (+ META_SANDBOX=1) or pass --account <sandbox>. See docs/SANDBOX_SETUP.md.",
+                file=sys.stderr,
+            )
+            return 2
     dataset = load_source(args.source)
     issues = validate_dataset(dataset)
     if has_blocking_errors(issues):
@@ -148,6 +170,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
         mode=args.mode,
         state_path=args.state,
         continue_on_error=args.continue_on_error,
+        account_override=args.account,
     )
     append_rows.setdefault("ValidationErrors", []).extend(validation_rows(issues).get("ValidationErrors", []))
     save_with_updates(dataset, args.out_source, updates, append_rows)
@@ -186,7 +209,7 @@ def cmd_insights(args: argparse.Namespace) -> int:
     if args.mode == "mock":
         append_rows = generate_mock_insights(dataset, breakdowns=args.breakdown)
     else:
-        ok, message, rows = get_live_insights(args.date_preset, args.level, breakdowns=args.breakdown)
+        ok, message, rows = get_live_insights(args.date_preset, args.level, breakdowns=args.breakdown, account=args.account)
         if not ok:
             print(message, file=sys.stderr)
             return 1
@@ -239,6 +262,20 @@ def cmd_demo(args: argparse.Namespace) -> int:
     print(f"- Insights workbook: {insights}")
     print(f"- Actions succeeded: {sum(1 for result in results if result.ok)}/{len(results)}")
     return 0 if all(result.ok for result in results) else 1
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    report = run_doctor(live=args.live, account=args.account)
+    if args.json:
+        print(json.dumps(report, indent=2))
+        return 0 if report["ok"] else 1
+    symbols = {"ok": "OK  ", "warn": "WARN", "fail": "FAIL"}
+    for check in report["checks"]:
+        print(f"[{symbols.get(check['status'], check['status'])}] {check['name']}: {check['detail']}")
+        if check.get("hint") and check["status"] != "ok":
+            print(f"       -> {check['hint']}")
+    print("Doctor: READY for live/sandbox." if report["ok"] else "Doctor: NOT ready — resolve FAIL checks above.")
+    return 0 if report["ok"] else 1
 
 
 def _print_issues(issues: list[Any]) -> None:

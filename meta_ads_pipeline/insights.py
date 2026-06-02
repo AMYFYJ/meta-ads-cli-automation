@@ -7,7 +7,7 @@ import subprocess
 from datetime import date, timedelta
 from typing import Any
 
-from .adapters import _extract_id, utc_now
+from .adapters import _extract_id, build_live_env, resolve_account, utc_now, with_retry
 from .models import Dataset
 from .schema import clean
 
@@ -51,7 +51,7 @@ def generate_mock_insights(dataset: Dataset, breakdowns: list[str] | None = None
     return {"PerformanceSnapshots": rows}
 
 
-def get_live_insights(date_preset: str = "last_7d", level: str = "ad", breakdowns: list[str] | None = None) -> tuple[bool, str, list[dict[str, Any]]]:
+def get_live_insights(date_preset: str = "last_7d", level: str = "ad", breakdowns: list[str] | None = None, account: str = "") -> tuple[bool, str, list[dict[str, Any]]]:
     breakdowns = breakdowns or []
     command = [
         os.environ.get("META_CLI_BIN", "meta"),
@@ -66,9 +66,16 @@ def get_live_insights(date_preset: str = "last_7d", level: str = "ad", breakdown
         "--level",
         level,
     ]
+    resolved_account = resolve_account(account)
+    if resolved_account:
+        command.extend(["--ad-account-id", resolved_account])
     for breakdown in breakdowns:
         command.extend(["--breakdown", breakdown])
-    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    env = build_live_env(account)
+    try:
+        _, _, completed = with_retry(lambda: _run_insights(command, env))
+    except FileNotFoundError as exc:
+        return False, str(exc), []
     if completed.returncode != 0:
         return False, completed.stderr, []
     try:
@@ -111,6 +118,11 @@ def get_live_insights(date_preset: str = "last_7d", level: str = "ad", breakdown
             }
         )
     return True, completed.stdout, rows
+
+
+def _run_insights(command: list[str], env: dict[str, str]):
+    completed = subprocess.run(command, capture_output=True, text=True, check=False, env=env)
+    return completed.returncode == 0, completed.stderr, completed
 
 
 def _campaign_for_adset(dataset: Dataset, adset_key: str) -> str:

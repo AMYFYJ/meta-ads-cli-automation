@@ -1,6 +1,22 @@
 # Live Mode Guide
 
-Mock mode is for demos and pipeline QA. Live mode calls Meta's official CLI and the Graph API fallback for account creation.
+Mock mode is for demos and pipeline QA. Live mode calls Meta's official `meta-ads` CLI and the
+Graph API fallback for account creation, audiences, uploads, targeting, duplicates, patches, and deletes.
+
+## Sandbox first (start here)
+
+If you are new to the Meta Marketing API, **do not point live mode at a real ad account yet.**
+Set up a **Sandbox ad account** first — API calls behave like production but never deliver ads
+or spend money. Follow [SANDBOX_SETUP.md](SANDBOX_SETUP.md), then come back here.
+
+Run the preflight check before any live run:
+
+```bash
+python -m meta_ads_pipeline doctor --live
+```
+
+It verifies Python 3.12+, the `meta` CLI, env vars, your token (read-only `adaccount list`),
+and whether the target account is your sandbox. Resolve every `FAIL` before applying.
 
 ## Prerequisites
 
@@ -12,7 +28,7 @@ Mock mode is for demos and pipeline QA. Live mode calls Meta's official CLI and 
 Install:
 
 ```bash
-python3.12 -m pip install meta-ads
+python3.12 -m pip install 'meta-ads-workflow[live]'   # or: pip install meta-ads
 ```
 
 Configure:
@@ -23,6 +39,26 @@ export AD_ACCOUNT_ID="act_123456789"
 export BUSINESS_ID="123456789"
 export META_API_VERSION="v21.0"
 ```
+
+### Account scoping and safety flags
+
+| Flag / env var | Effect |
+| --- | --- |
+| `apply/insights --account act_...` | Override the target ad account for this run. |
+| `SANDBOX_AD_ACCOUNT_ID` | Your sandbox account id. |
+| `META_SANDBOX=1` | Live runs default to the sandbox account until you unset it. |
+| `apply --require-sandbox` / `META_REQUIRE_SANDBOX=1` | Refuse live `apply` unless the target is the sandbox account (exit 2). |
+
+### Rate-limit handling
+
+Meta enforces roughly **200 calls/hour**. Live subprocess and Graph calls automatically retry
+on transient/rate-limit errors with exponential backoff (honoring `Retry-After`):
+
+| Env var | Default | Meaning |
+| --- | --- | --- |
+| `META_RETRY_ATTEMPTS` | `5` | Max attempts per call. |
+| `META_RETRY_BASE_DELAY` | `2.0` | Base backoff seconds (doubles each attempt). |
+| `META_MIN_INTERVAL` | `0` | Optional fixed pause (seconds) between live actions. |
 
 Smoke test:
 
@@ -40,15 +76,17 @@ python3 -m meta_ads_pipeline validate --source examples/meta_ads_workflow_templa
 python3 -m meta_ads_pipeline plan --source examples/meta_ads_workflow_template.xlsx --out outputs/live_plan.json
 ```
 
-Apply only after reviewing the plan:
+Apply only after reviewing the plan (sandbox-guarded):
 
 ```bash
 python3 -m meta_ads_pipeline apply \
   --source examples/meta_ads_workflow_template.xlsx \
-  --mode live \
+  --mode live --require-sandbox --account "$SANDBOX_AD_ACCOUNT_ID" \
   --out-source outputs/live_applied_workbook.xlsx \
   --yes
 ```
+
+For a real (production) account, drop `--require-sandbox` and target the real `act_...`.
 
 For insights with breakdowns:
 

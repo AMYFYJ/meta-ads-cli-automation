@@ -3,12 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import random
 import subprocess
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .models import Action, ActionResult, Dataset
 from .planner import existing_ids
@@ -17,6 +20,97 @@ from .schema import OBJECT_CONFIG, TABLES, clean
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def resolve_account(account_override: str = "") -> str:
+    """Resolve the ad account id to target for live actions.
+
+    Precedence: explicit ``--account`` override > sandbox account (when ``META_SANDBOX=1``)
+    > ``AD_ACCOUNT_ID``. This keeps sandbox the default target until the user opts out.
+    """
+    if account_override:
+        return account_override
+    if _truthy(os.environ.get("META_SANDBOX")):
+        sandbox = clean(os.environ.get("SANDBOX_AD_ACCOUNT_ID"))
+        if sandbox:
+            return sandbox
+    return clean(os.environ.get("AD_ACCOUNT_ID"))
+
+
+def build_live_env(account_override: str = "") -> dict[str, str]:
+    """Return a copy of the environment with ``AD_ACCOUNT_ID`` scoped to the resolved account."""
+    env = dict(os.environ)
+    account = resolve_account(account_override)
+    if account:
+        env["AD_ACCOUNT_ID"] = account
+    return env
+
+
+def is_sandbox_account(account_id: str) -> bool:
+    sandbox = clean(os.environ.get("SANDBOX_AD_ACCOUNT_ID"))
+    return bool(account_id) and account_id == sandbox
+
+
+def _truthy(value: str | None) -> bool:
+    return clean(value).lower() in {"1", "true", "yes", "on"}
+
+
+_TRANSIENT_TOKENS = (
+    "rate limit",
+    "request limit reached",
+    "user request limit reached",
+    "(#4)",
+    "(#17)",
+    "(#32)",
+    "(#80004)",
+    "(#613)",
+    "temporarily",
+    "try again",
+)
+_TRANSIENT_HTTP = {429, 500, 502, 503, 504}
+
+
+def _is_transient(message: str, code: int | None) -> bool:
+    if code in _TRANSIENT_HTTP:
+        return True
+    text = (message or "").lower()
+    return any(token in text for token in _TRANSIENT_TOKENS)
+
+
+def with_retry(call: Callable[[], Any], *, attempts: int | None = None, base_delay: float | None = None, max_delay: float = 60.0) -> Any:
+    """Invoke ``call`` with exponential backoff on transient/rate-limit failures.
+
+    ``call`` should return ``(ok: bool, message: str, payload)`` or raise ``urllib.error.HTTPError``.
+    Only transient failures (rate limits, HTTP 429/5xx) are retried; everything else returns immediately.
+    """
+    attempts = attempts if attempts is not None else int(os.environ.get("META_RETRY_ATTEMPTS", "5"))
+    base_delay = base_delay if base_delay is not None else float(os.environ.get("META_RETRY_BASE_DELAY", "2.0"))
+    last_result: Any = None
+    for attempt in range(1, max(1, attempts) + 1):
+        retry_after: float | None = None
+        try:
+            ok, message, payload = call()
+            last_result = (ok, message, payload)
+            if ok or attempt >= attempts or not _is_transient(message, None):
+                return last_result
+        except urllib.error.HTTPError as exc:
+            body = ""
+            try:
+                body = exc.read().decode("utf-8")
+            except Exception:  # noqa: BLE001 - body is best-effort for diagnostics.
+                body = str(exc)
+            last_result = (False, body or str(exc), None)
+            if attempt >= attempts or not _is_transient(body, exc.code):
+                return last_result
+            header = exc.headers.get("Retry-After") if exc.headers else None
+            if header:
+                try:
+                    retry_after = float(header)
+                except ValueError:
+                    retry_after = None
+        delay = retry_after if retry_after is not None else min(max_delay, base_delay * (2 ** (attempt - 1)))
+        time.sleep(delay + random.uniform(0, 0.5))
+    return last_result
 
 
 def payload_hash(payload: dict[str, Any]) -> str:
@@ -28,11 +122,11 @@ def context_from_dataset(dataset: Dataset) -> dict[str, dict[str, str]]:
     return existing_ids(dataset)
 
 
-def make_adapter(mode: str, dataset: Dataset, state_path: str | None = None):
+def make_adapter(mode: str, dataset: Dataset, state_path: str | None = None, account_override: str = ""):
     if mode == "mock":
         return MockMetaAdapter(dataset=dataset, state_path=state_path)
     if mode == "live":
-        return LiveMetaCliAdapter(dataset=dataset)
+        return LiveMetaCliAdapter(dataset=dataset, account_override=account_override)
     raise ValueError(f"Unsupported mode: {mode}")
 
 
@@ -240,8 +334,13 @@ class MockMetaAdapter:
 
 
 class LiveMetaCliAdapter:
-    def __init__(self, dataset: Dataset):
+    def __init__(self, dataset: Dataset, account_override: str = ""):
         self.dataset = dataset
+        self.account_override = account_override
+        self._env = build_live_env(account_override)
+
+    def account_id(self) -> str:
+        return resolve_account(self.account_override)
 
     def apply(self, action: Action, context: dict[str, dict[str, str]]) -> ActionResult:
         if action.dry_run_only:
@@ -253,10 +352,14 @@ class LiveMetaCliAdapter:
         command = [_resolve_any(token, context) for token in action.command]
         if command and command[0] == "meta":
             command[0] = os.environ.get("META_CLI_BIN", "meta")
+        command = self._apply_account_override(command)
         try:
-            completed = subprocess.run(command, capture_output=True, text=True, check=False)
+            completed = with_retry(lambda: _run_cli(command, self._env))
         except FileNotFoundError as exc:
             return ActionResult(action=action, ok=False, message=str(exc), stderr=str(exc))
+        if completed is None:
+            return ActionResult(action=action, ok=False, message="Live command produced no result.")
+        completed = completed[2]
 
         ok = completed.returncode == 0
         meta_id = _extract_id(completed.stdout)
@@ -275,6 +378,16 @@ class LiveMetaCliAdapter:
 
     def save(self) -> None:
         return None
+
+    def _apply_account_override(self, command: list[str]) -> list[str]:
+        account = resolve_account(self.account_override)
+        if not account:
+            return command
+        result = list(command)
+        for idx, token in enumerate(result[:-1]):
+            if token == "--ad-account-id":
+                result[idx + 1] = account
+        return result
 
     def _create_ad_account(self, action: Action, context: dict[str, dict[str, str]]) -> ActionResult:
         token = os.environ.get("ACCESS_TOKEN")
@@ -295,12 +408,13 @@ class LiveMetaCliAdapter:
             "media_agency": "NONE",
         }
         data = urllib.parse.urlencode(form).encode("utf-8")
+        request = urllib.request.Request(url, data=data, method="POST")
         try:
-            request = urllib.request.Request(url, data=data, method="POST")
-            with urllib.request.urlopen(request, timeout=60) as response:
-                body = response.read().decode("utf-8")
+            ok, message, body = with_retry(lambda: _urlopen_text(request))
         except Exception as exc:  # noqa: BLE001 - surface Meta/API errors in the workbook log.
             return ActionResult(action=action, ok=False, message="Ad account API create failed.", stderr=str(exc))
+        if not ok:
+            return ActionResult(action=action, ok=False, message="Ad account API create failed.", stderr=message)
         meta_id = _extract_id(body)
         if meta_id:
             context.setdefault("account", {})[action.object_key] = meta_id
@@ -320,10 +434,11 @@ class LiveMetaCliAdapter:
             return ActionResult(action=action, ok=False, message="ACCESS_TOKEN is required for Graph API actions.")
         request = build_graph_request(action, context, token=token)
         try:
-            with urllib.request.urlopen(request, timeout=60) as response:
-                response_body = response.read().decode("utf-8")
+            graph_ok, message, response_body = with_retry(lambda: _urlopen_text(request))
         except Exception as exc:  # noqa: BLE001 - keep Meta/API failures visible in PublishLog.
             return ActionResult(action=action, ok=False, message="Graph API action failed.", stderr=str(exc))
+        if not graph_ok:
+            return ActionResult(action=action, ok=False, message="Graph API action failed.", stderr=message)
 
         meta_id = _extract_duplicate_ids(response_body) if action.operation == "duplicate" else _extract_path(response_body, action.id_path)
         ok = bool(meta_id) or action.operation in {"update", "delete", "upload", "duplicate", "patch"}
@@ -399,6 +514,17 @@ def _mock_id(object_type: str, key: str) -> str:
     }[object_type]
     digest = hashlib.sha1(f"{object_type}:{key}".encode("utf-8")).hexdigest()[:10]
     return f"{prefix}_{digest}"
+
+
+def _run_cli(command: list[str], env: dict[str, str] | None = None):
+    completed = subprocess.run(command, capture_output=True, text=True, check=False, env=env)
+    return completed.returncode == 0, completed.stderr, completed
+
+
+def _urlopen_text(request: urllib.request.Request):
+    with urllib.request.urlopen(request, timeout=60) as response:
+        body = response.read().decode("utf-8")
+    return True, body, body
 
 
 def _resolve_any(value: str, context: dict[str, dict[str, str]]) -> str:

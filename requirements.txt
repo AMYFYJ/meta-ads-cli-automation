@@ -1,3 +1,4 @@
 openpyxl>=3.1
 Pillow>=10.0
 PyYAML>=6.0
+# Live mode (Python 3.12+ only): pip install 'meta-ads-workflow[live]'  or  pip install meta-ads

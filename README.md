@@ -113,22 +113,31 @@ python3 -m meta_ads_pipeline optimize \
 
 ## Live Mode
 
-Meta's official `meta-ads` package requires Python 3.12+.
+Meta's official `meta-ads` package requires Python 3.12+. **New to the Meta API? Start with a
+sandbox account** (real API, zero spend/delivery) — see
+[docs/SANDBOX_SETUP.md](docs/SANDBOX_SETUP.md). Then validate readiness with the preflight:
 
 ```bash
-python3.12 -m pip install meta-ads
+python3.12 -m pip install 'meta-ads-workflow[live]'   # or: pip install meta-ads
 export ACCESS_TOKEN="..."
-export AD_ACCOUNT_ID="act_123456789"
-export BUSINESS_ID="123456789"
+export SANDBOX_AD_ACCOUNT_ID="act_SANDBOX"
+export AD_ACCOUNT_ID="$SANDBOX_AD_ACCOUNT_ID"
+export META_SANDBOX=1            # default target = sandbox
+export META_REQUIRE_SANDBOX=1    # block live apply on non-sandbox accounts
+
+python3 -m meta_ads_pipeline doctor --live      # preflight: CLI, token, sandbox check
 
 python3 -m meta_ads_pipeline apply \
   --source examples/meta_ads_workflow_template.xlsx \
-  --mode live \
+  --mode live --require-sandbox --account "$SANDBOX_AD_ACCOUNT_ID" \
   --out-source outputs/live_applied_workbook.xlsx \
   --yes
 ```
 
-New objects are created as `PAUSED` by default unless the workbook explicitly says otherwise. Use a dry-run `plan` before live apply.
+New objects are created as `PAUSED` by default unless the workbook explicitly says otherwise.
+Use a dry-run `plan` before live apply. To graduate to a real ad account, unset `META_SANDBOX`,
+set the real `AD_ACCOUNT_ID`, and drop `--require-sandbox`. Live calls retry on rate limits
+(~200/hr) with exponential backoff — see [docs/LIVE_MODE.md](docs/LIVE_MODE.md).
 
 ## Important Meta Constraints
 
