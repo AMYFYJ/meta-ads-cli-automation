@@ -76,6 +76,26 @@ class PipelineTest(unittest.TestCase):
             wb = load_workbook(insights, data_only=True)
             self.assertEqual(wb["PerformanceSnapshots"].max_row, 3)
 
+    def test_live_cli_commands_place_ad_account_after_ads_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workbook = root / "template.xlsx"
+            ensure_sample_assets(str(root))
+            create_template(str(workbook), with_sample=True)
+
+            dataset = load_source(str(workbook))
+            account = dataset.tables["Accounts"][0]
+            account["ad_account_id"] = "act_123"
+            account["create_ad_account"] = "FALSE"
+
+            campaign_action = next(
+                action for action in build_plan(dataset) if action.action_id == "010_create_campaign_cmp_spring_launch"
+            )
+            self.assertEqual(
+                campaign_action.command[:7],
+                ["meta", "--output", "json", "--no-input", "ads", "--ad-account-id", "act_123"],
+            )
+
     def test_sqlite_template_uses_same_schema(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

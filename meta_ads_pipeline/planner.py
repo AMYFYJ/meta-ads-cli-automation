@@ -599,14 +599,14 @@ def _duplicate_actions(dataset: Dataset) -> list[Action]:
 
 
 def _meta_prefix(account_row: dict[str, Any]) -> list[str]:
-    command = ["meta", "--output", "json", "--no-input"]
+    command = ["meta", "--output", "json", "--no-input", "ads"]
     ad_account_id = clean(account_row.get("ad_account_id"))
     account_key = clean(account_row.get("account_key"))
     if ad_account_id:
         command.extend(["--ad-account-id", ad_account_id])
     elif account_key:
         command.extend(["--ad-account-id", placeholder("account", account_key)])
-    return command + ["ads"]
+    return command
 
 
 def _meta_prefix_for_object(dataset: Dataset, object_type: str, key_or_id: str) -> list[str]:
