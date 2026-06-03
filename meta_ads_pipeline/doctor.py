@@ -12,7 +12,7 @@ import subprocess
 import sys
 from typing import Any
 
-from .adapters import is_sandbox_account, resolve_account
+from .adapters import is_sandbox_account, redact_secrets, resolve_account
 from .schema import clean
 
 
@@ -106,11 +106,11 @@ def _check_token_readonly(account: str) -> dict[str, Any]:
     except FileNotFoundError:
         return _check("token", "fail", f"`{meta_bin}` not found.", "Install meta-ads first.")
     if completed.returncode != 0:
-        return _check("token", "fail", "Read-only token check failed.", completed.stderr.strip())
+        return _check("token", "fail", "Read-only token check failed.", redact_secrets(completed.stderr.strip()))
     try:
         json.loads(completed.stdout)
     except json.JSONDecodeError:
-        return _check("token", "warn", "Token call succeeded but output was not JSON.", completed.stdout[:200])
+        return _check("token", "warn", "Token call succeeded but output was not JSON.", redact_secrets(completed.stdout[:200]))
     return _check("token", "ok", "Token validated via `meta ads adaccount list`.")
 
 

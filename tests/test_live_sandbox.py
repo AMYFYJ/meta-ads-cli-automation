@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from meta_ads_pipeline.adapters import build_live_env, is_sandbox_account, resolve_account
+from meta_ads_pipeline.adapters import _extract_id, build_live_env, is_sandbox_account, resolve_account
 from meta_ads_pipeline.doctor import run_doctor
 
 
@@ -50,6 +50,9 @@ class DoctorStructureTest(unittest.TestCase):
                     os.environ.pop(key, None)
                 else:
                     os.environ[key] = value
+
+    def test_extract_id_accepts_meta_cli_list_response(self) -> None:
+        self.assertEqual(_extract_id('[{"id": "6999147683583"}]'), "6999147683583")
 
 
 @unittest.skipUnless(RUN_LIVE, "set RUN_LIVE_TESTS=1 and ACCESS_TOKEN to run live sandbox tests")

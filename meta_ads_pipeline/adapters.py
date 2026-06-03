@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import subprocess
 import time
 import urllib.error
@@ -53,6 +54,17 @@ def is_sandbox_account(account_id: str) -> bool:
 
 def _truthy(value: str | None) -> bool:
     return clean(value).lower() in {"1", "true", "yes", "on"}
+
+
+def redact_secrets(message: str) -> str:
+    """Remove token values that upstream Meta tooling may echo in exception URLs."""
+    redacted = message or ""
+    token = clean(os.environ.get("ACCESS_TOKEN"))
+    if token:
+        redacted = redacted.replace(token, "[REDACTED_ACCESS_TOKEN]")
+    redacted = re.sub(r"(access_token=)[^&\s)]+", r"\1[REDACTED_ACCESS_TOKEN]", redacted)
+    redacted = re.sub(r"(access_token%3D)[^&\s)]+", r"\1[REDACTED_ACCESS_TOKEN]", redacted, flags=re.IGNORECASE)
+    return redacted
 
 
 _TRANSIENT_TOKENS = (
@@ -363,7 +375,7 @@ class LiveMetaCliAdapter:
 
         ok = completed.returncode == 0
         meta_id = _extract_id(completed.stdout)
-        updates = self._updates_for_live_result(action, ok, meta_id, completed.stderr)
+        updates = self._updates_for_live_result(action, ok, meta_id, redact_secrets(completed.stderr))
         if ok and meta_id and action.operation == "create":
             context.setdefault(action.object_type, {})[action.object_key] = meta_id
         return ActionResult(
@@ -371,8 +383,8 @@ class LiveMetaCliAdapter:
             ok=ok,
             meta_id=meta_id,
             message="Live command succeeded." if ok else "Live command failed.",
-            stdout=completed.stdout,
-            stderr=completed.stderr,
+            stdout=redact_secrets(completed.stdout),
+            stderr=redact_secrets(completed.stderr),
             updates=updates,
         )
 
@@ -412,9 +424,9 @@ class LiveMetaCliAdapter:
         try:
             ok, message, body = with_retry(lambda: _urlopen_text(request))
         except Exception as exc:  # noqa: BLE001 - surface Meta/API errors in the workbook log.
-            return ActionResult(action=action, ok=False, message="Ad account API create failed.", stderr=str(exc))
+            return ActionResult(action=action, ok=False, message="Ad account API create failed.", stderr=redact_secrets(str(exc)))
         if not ok:
-            return ActionResult(action=action, ok=False, message="Ad account API create failed.", stderr=message)
+            return ActionResult(action=action, ok=False, message="Ad account API create failed.", stderr=redact_secrets(message))
         meta_id = _extract_id(body)
         if meta_id:
             context.setdefault("account", {})[action.object_key] = meta_id
@@ -436,9 +448,9 @@ class LiveMetaCliAdapter:
         try:
             graph_ok, message, response_body = with_retry(lambda: _urlopen_text(request))
         except Exception as exc:  # noqa: BLE001 - keep Meta/API failures visible in PublishLog.
-            return ActionResult(action=action, ok=False, message="Graph API action failed.", stderr=str(exc))
+            return ActionResult(action=action, ok=False, message="Graph API action failed.", stderr=redact_secrets(str(exc)))
         if not graph_ok:
-            return ActionResult(action=action, ok=False, message="Graph API action failed.", stderr=message)
+            return ActionResult(action=action, ok=False, message="Graph API action failed.", stderr=redact_secrets(message))
 
         meta_id = _extract_duplicate_ids(response_body) if action.operation == "duplicate" else _extract_path(response_body, action.id_path)
         ok = bool(meta_id) or action.operation in {"update", "delete", "upload", "duplicate", "patch"}
@@ -450,7 +462,7 @@ class LiveMetaCliAdapter:
             ok=ok,
             meta_id=meta_id,
             message="Graph API action succeeded." if ok else "Graph API response did not include an ID.",
-            stdout=response_body,
+            stdout=redact_secrets(response_body),
             updates=updates,
         )
 
@@ -572,6 +584,10 @@ def _extract_id(stdout: str) -> str:
             first = parsed["data"][0]
             if isinstance(first, dict) and "id" in first:
                 return str(first["id"])
+    if isinstance(parsed, list) and parsed:
+        first = parsed[0]
+        if isinstance(first, dict) and "id" in first:
+            return str(first["id"])
     return ""
 
 

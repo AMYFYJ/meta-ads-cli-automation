@@ -7,7 +7,7 @@ import subprocess
 from datetime import date, timedelta
 from typing import Any
 
-from .adapters import _extract_id, build_live_env, resolve_account, utc_now, with_retry
+from .adapters import _extract_id, build_live_env, redact_secrets, resolve_account, utc_now, with_retry
 from .models import Dataset
 from .schema import clean
 
@@ -59,16 +59,18 @@ def get_live_insights(date_preset: str = "last_7d", level: str = "ad", breakdown
         "json",
         "--no-input",
         "ads",
-        "insights",
-        "get",
-        "--date-preset",
-        date_preset,
-        "--level",
-        level,
     ]
     resolved_account = resolve_account(account)
     if resolved_account:
         command.extend(["--ad-account-id", resolved_account])
+    command.extend(
+        [
+            "insights",
+            "get",
+            "--date-preset",
+            date_preset,
+        ]
+    )
     for breakdown in breakdowns:
         command.extend(["--breakdown", breakdown])
     env = build_live_env(account)
@@ -77,12 +79,12 @@ def get_live_insights(date_preset: str = "last_7d", level: str = "ad", breakdown
     except FileNotFoundError as exc:
         return False, str(exc), []
     if completed.returncode != 0:
-        return False, completed.stderr, []
+        return False, redact_secrets(completed.stderr), []
     try:
         parsed = json.loads(completed.stdout)
     except json.JSONDecodeError:
         return False, "Meta CLI returned non-JSON insights output.", []
-    data = parsed.get("data", parsed if isinstance(parsed, list) else [])
+    data = parsed.get("data", []) if isinstance(parsed, dict) else parsed if isinstance(parsed, list) else []
     rows = []
     for idx, item in enumerate(data if isinstance(data, list) else [], start=1):
         meta_id = str(item.get(f"{level}_id", item.get("ad_id", _extract_id(json.dumps(item)))))
