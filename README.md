@@ -11,6 +11,24 @@ This project turns a campaign planning workbook or SQLite database into a repeat
 - Validation, dry-run planning, apply, ID sync back into the source of truth, audit logging, and insight snapshots.
 - Excel-first workflow with the same tables supported in SQLite for a database-backed version.
 
+## Current Status
+
+As of June 24, 2026, the live sandbox path has been verified locally:
+
+- The Meta access token validates with `meta ads adaccount list`.
+- The sandbox ad account is selected through `AD_ACCOUNT_ID`, `SANDBOX_AD_ACCOUNT_ID`, `META_SANDBOX=1`, and `META_REQUIRE_SANDBOX=1`.
+- `doctor --live` passes against the sandbox.
+- A campaign-only live apply created `Spring Launch | Sales | US` in the sandbox as `PAUSED`.
+- The applied workbook writes the new Meta campaign ID back into the `Campaigns` sheet and records the result in `PublishLog`.
+
+The next test is to build down the object tree one layer at a time:
+
+1. Create an ad set under the sandbox campaign.
+2. Create a creative after the required Page, asset, and actor IDs are confirmed.
+3. Create an ad using the campaign, ad set, and creative IDs.
+4. Pull live sandbox insights and write them into `PerformanceSnapshots`.
+5. Run `optimize` against the insight rows and review generated `BulkChanges`.
+
 ## Quick Demo
 
 Install local dependencies if needed:
@@ -126,6 +144,7 @@ export META_SANDBOX=1            # default target = sandbox
 export META_REQUIRE_SANDBOX=1    # block live apply on non-sandbox accounts
 
 python3 -m meta_ads_pipeline doctor --live      # preflight: CLI, token, sandbox check
+python3 -m meta_ads_pipeline plan --source examples/meta_ads_workflow_template.xlsx --out outputs/live_plan.json
 
 python3 -m meta_ads_pipeline apply \
   --source examples/meta_ads_workflow_template.xlsx \
@@ -138,6 +157,10 @@ New objects are created as `PAUSED` by default unless the workbook explicitly sa
 Use a dry-run `plan` before live apply. To graduate to a real ad account, unset `META_SANDBOX`,
 set the real `AD_ACCOUNT_ID`, and drop `--require-sandbox`. Live calls retry on rate limits
 (~200/hr) with exponential backoff — see [docs/LIVE_MODE.md](docs/LIVE_MODE.md).
+
+For the first sandbox smoke test, point the `Accounts.ad_account_id` cell at the existing
+sandbox `act_...` account and set `create_ad_account` to `FALSE`. That prevents the sample
+workbook from trying to create a new ad account before campaign creation.
 
 ## Important Meta Constraints
 
