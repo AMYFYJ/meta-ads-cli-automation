@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from meta_ads_pipeline.adapters import _extract_id, build_live_env, is_sandbox_account, resolve_account
-from meta_ads_pipeline.doctor import run_doctor
+from meta_ads_pipeline.doctor import classify_account_access, run_doctor
 
 
 RUN_LIVE = os.environ.get("RUN_LIVE_TESTS") == "1" and bool(os.environ.get("ACCESS_TOKEN"))
@@ -53,6 +53,39 @@ class DoctorStructureTest(unittest.TestCase):
 
     def test_extract_id_accepts_meta_cli_list_response(self) -> None:
         self.assertEqual(_extract_id('[{"id": "6999147683583"}]'), "6999147683583")
+
+
+class AccountAccessClassifierTest(unittest.TestCase):
+    """Offline coverage for the doctor account-access error mapping (no credentials)."""
+
+    def test_successful_read_is_ok(self) -> None:
+        check = classify_account_access("act_123", True, '{"id": "act_123", "name": "Test"}')
+        self.assertEqual(check["status"], "ok")
+        self.assertEqual(check["name"], "account_access")
+
+    def test_no_ads_role_error_200_points_to_reconnect(self) -> None:
+        body = '{"error": {"message": "(#200) Ad account owner has NOT grant ads_management or ads_read permission", "type": "OAuthException", "code": 200}}'
+        check = classify_account_access("act_2012963492669349", False, body)
+        self.assertEqual(check["status"], "fail")
+        self.assertIn("ads_management", check["hint"])
+        self.assertIn("SANDBOX_SETUP", check["hint"])
+
+    def test_missing_permissions_object_does_not_exist_is_reconnect(self) -> None:
+        body = (
+            '{"error": {"message": "Unsupported get request. Object with ID '
+            "'act_2012963492669349' does not exist, cannot be loaded due to missing "
+            'permissions", "code": 100}}'
+        )
+        check = classify_account_access("act_2012963492669349", False, body)
+        self.assertEqual(check["status"], "fail")
+        self.assertIn("no ads role", check["hint"])
+
+    def test_expired_token_is_token_hint_not_reconnect(self) -> None:
+        body = '{"error": {"message": "Error validating access token: Session has expired", "type": "OAuthException", "code": 190}}'
+        check = classify_account_access("act_123", False, body)
+        self.assertEqual(check["status"], "fail")
+        self.assertIn("scopes", check["hint"])
+        self.assertNotIn("add your user", check["hint"])
 
 
 @unittest.skipUnless(RUN_LIVE, "set RUN_LIVE_TESTS=1 and ACCESS_TOKEN to run live sandbox tests")

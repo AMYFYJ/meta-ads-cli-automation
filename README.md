@@ -29,6 +29,28 @@ The next test is to build down the object tree one layer at a time:
 4. Pull live sandbox insights and write them into `PerformanceSnapshots`.
 5. Run `optimize` against the insight rows and review generated `BulkChanges`.
 
+### Blocker before step 2: token access to the sandbox ad account
+
+A regenerated token can fix Page permissions while *losing* its role on the sandbox
+ad account. The symptom is a creative/image-upload failure such as
+`(#200) Ad account owner has NOT grant ads_management or ads_read permission` or
+`Object with ID 'act_...' does not exist, cannot be loaded due to missing permissions`,
+even though the token reads the Page fine. (Note: `/me/adaccounts` not listing a sandbox
+account is normal and is **not** proof of access — a direct read is the real test.)
+
+`doctor --live` now includes an **`account_access`** check that reads the target
+`act_...` directly and fails at preflight (instead of mid-creative) when the token has no
+ads role on it:
+
+```bash
+python3 -m meta_ads_pipeline doctor --live --account "$SANDBOX_AD_ACCOUNT_ID"
+```
+
+If `account_access` fails, follow
+[docs/SANDBOX_SETUP.md → Troubleshooting](docs/SANDBOX_SETUP.md#troubleshooting--token-cant-see-the-sandbox-ad-account)
+to reconnect the sandbox account to your token (same app, `ads_management` + `ads_read`,
+add your user to the sandbox account), then resume the build-down at step 2.
+
 ## Quick Demo
 
 Install local dependencies if needed:

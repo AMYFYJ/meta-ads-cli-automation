@@ -16,7 +16,10 @@ python -m meta_ads_pipeline doctor --live
 ```
 
 It verifies Python 3.12+, the `meta` CLI, env vars, your token (read-only `adaccount list`),
-and whether the target account is your sandbox. Resolve every `FAIL` before applying.
+whether the target account is your sandbox, and **`account_access`** — a direct read of the
+target `act_...` that fails fast when the token has no ads role on it (the `(#200)` /
+"missing permissions" family). Resolve every `FAIL` before applying; for `account_access`
+failures see [SANDBOX_SETUP.md → Troubleshooting](SANDBOX_SETUP.md#troubleshooting--token-cant-see-the-sandbox-ad-account).
 
 ## Prerequisites
 

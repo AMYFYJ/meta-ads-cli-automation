@@ -10,6 +10,8 @@ import json
 import os
 import subprocess
 import sys
+import urllib.parse
+import urllib.request
 from typing import Any
 
 from .adapters import is_sandbox_account, redact_secrets, resolve_account
@@ -25,6 +27,7 @@ def run_doctor(live: bool = False, account: str = "") -> dict[str, Any]:
     ]
     if live:
         checks.append(_check_token_readonly(account))
+        checks.append(_check_account_access(account))
     ok = all(check["status"] != "fail" for check in checks)
     return {"checks": checks, "ok": ok}
 
@@ -117,3 +120,120 @@ def _check_token_readonly(account: str) -> dict[str, Any]:
 def _run(command: list[str], env: dict[str, str]):
     completed = subprocess.run(command, capture_output=True, text=True, check=False, env=env)
     return completed.returncode == 0, completed.stderr, completed
+
+
+# Reconnect the sandbox account to your token. Shown whenever the token has no
+# ads role on the target account (the (#200)/"does not exist due to missing
+# permissions" family), which is the most common sandbox onboarding failure.
+RECONNECT_HINT = (
+    "Your token has no ads role on this account. This is a Meta-side fix, not a CLI bug: "
+    "(1) generate the token from the SAME Meta app that owns the sandbox account, "
+    "(2) add your user to the sandbox ad account with the ads_management + ads_read tasks "
+    "(App Dashboard -> Marketing API -> Tools -> sandbox ad account -> users), then "
+    "(3) re-run `doctor --live`. Note: sandbox accounts often do NOT appear in /me/adaccounts "
+    "even when usable, so a direct read is the real test. See docs/SANDBOX_SETUP.md (Troubleshooting)."
+)
+
+
+def _check_account_access(account: str) -> dict[str, Any]:
+    """Verify the token can actually *read* the resolved target account.
+
+    ``adaccount list`` validating the token is not enough: a token can list its
+    personal accounts while having no role on the sandbox account. This does a
+    direct read of the resolved account so the failure surfaces at preflight
+    instead of later at image upload / creative create.
+    """
+    account_id = resolve_account(account)
+    if not account_id:
+        return _check(
+            "account_access",
+            "warn",
+            "No ad account resolved; skipping access check.",
+            "Set AD_ACCOUNT_ID / SANDBOX_AD_ACCOUNT_ID or pass --account act_...",
+        )
+    token = clean(os.environ.get("ACCESS_TOKEN"))
+    if not token:
+        return _check("account_access", "fail", "ACCESS_TOKEN not set; cannot check account access.", "Set ACCESS_TOKEN.")
+    from .adapters import with_retry  # local import to keep module import light
+
+    version = os.environ.get("META_API_VERSION", "v21.0")
+    query = urllib.parse.urlencode({"fields": "id,name,account_status", "access_token": token})
+    url = f"https://graph.facebook.com/{version}/{account_id}?{query}"
+    try:
+        result = with_retry(lambda: _graph_get(url))
+    except Exception as exc:  # noqa: BLE001 - network/URL errors become a FAIL with the raw reason.
+        result = (False, str(exc), None)
+    ok, body, _ = result if result else (False, "Account read produced no result.", None)
+    return classify_account_access(account_id, ok, body or "")
+
+
+def _graph_get(url: str):
+    with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310 - fixed https graph.facebook.com host.
+        body = response.read().decode("utf-8")
+    return True, body, body
+
+
+def classify_account_access(account_id: str, ok: bool, body: str) -> dict[str, Any]:
+    """Map a Graph account-read result into a doctor check (pure; unit-testable).
+
+    ``ok`` is whether the read succeeded; ``body`` is the JSON response or error
+    body. The permission family ((#200), "does not grant", "does not exist /
+    missing permissions") maps to the sandbox reconnect hint; invalid/expired
+    tokens map to a token hint.
+    """
+    body = body or ""
+    if ok:
+        sandbox = is_sandbox_account(account_id)
+        suffix = " (sandbox, no real spend)" if sandbox else ""
+        return _check("account_access", "ok", f"Token can read {account_id}{suffix}.")
+    low = body.lower()
+    detail = _first_error_message(body) or "account read failed"
+    # Order matters: permission errors also carry type "OAuthException", so the
+    # reconnect family is matched before the generic token family.
+    reconnect_markers = (
+        "(#200)",
+        "(#803)",
+        "has not grant",
+        "have not grant",
+        "does not grant",
+        "ads_management or ads_read",
+        "cannot be loaded due to missing",
+        "missing permission",
+        "does not have permission",
+        "do not have permission",
+        "does not exist",
+    )
+    token_markers = (
+        "(#190)",
+        "session has expired",
+        "session is invalid",
+        "malformed access token",
+        "invalid oauth access token",
+        "access token could not be decrypted",
+    )
+    if any(marker in low for marker in reconnect_markers):
+        return _check("account_access", "fail", f"Token cannot access {account_id}: {detail}", RECONNECT_HINT)
+    if any(marker in low for marker in token_markers):
+        return _check(
+            "account_access",
+            "fail",
+            f"Token rejected reading {account_id}: {detail}",
+            "Token is invalid/expired or missing the ads_management + ads_read scopes. "
+            "Regenerate it in the Graph API Explorer with those scopes. See docs/SANDBOX_SETUP.md.",
+        )
+    return _check("account_access", "fail", f"Account read failed for {account_id}: {detail}", redact_secrets(detail))
+
+
+def _first_error_message(body: str) -> str:
+    text = (body or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return redact_secrets(text[:200])
+    if isinstance(parsed, dict) and isinstance(parsed.get("error"), dict):
+        message = clean(parsed["error"].get("message"))
+        if message:
+            return redact_secrets(message)
+    return redact_secrets(text[:200])
