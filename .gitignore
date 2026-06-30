@@ -12,3 +12,5 @@ dist/
 outputs/
 state/
 *.log
+.DS_Store
+~$*

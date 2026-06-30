@@ -39,10 +39,24 @@ test this whole workflow end to end. Think of it as a flight simulator for your 
 ## Step 2 — Get an access token with the right permissions
 
 1. Open the **Graph API Explorer** (<https://developers.facebook.com/tools/explorer>).
-2. Select your app, then request the permissions **`ads_management`** and **`ads_read`**.
-3. Generate the token and copy it. (Tokens from the Explorer are short-lived; for longer use,
-   exchange it for a long-lived token — see Meta's docs. For sandbox testing a short-lived
-   token is fine to start.)
+2. In the **Meta App** dropdown (top right), select **the exact app that owns your sandbox ad
+   account** (the app from Step 1). This matters: a sandbox ad account is owned by one app, and
+   **only tokens generated from that same app can see it.** A token from any other app (or the
+   default Explorer app) will not list the sandbox and will fail account reads with
+   `(#200) Ad account owner has NOT grant ads_management or ads_read permission`.
+3. Under **Permissions**, add **`ads_management`** (create/publish) and **`ads_read`** (read).
+   `ads_read` alone cannot create ads.
+4. Click **Generate Access Token**, approve, and copy it. A valid token starts with **`EAA`** —
+   copy the whole thing and watch for a stray leading character (a duplicated `E` →
+   `EEAA...` produces a `Malformed access token` error).
+5. Explorer tokens are **short-lived (~1–2 hours)** and will keep expiring on you mid-task.
+   Exchange the short-lived token for a **long-lived (~60 day)** one:
+
+   ```bash
+   curl -s "https://graph.facebook.com/v23.0/oauth/access_token?grant_type=fb_exchange_token&client_id=APP_ID&client_secret=APP_SECRET&fb_exchange_token=SHORT_LIVED_TOKEN"
+   ```
+
+   Use the returned `access_token` as your `ACCESS_TOKEN`.
 
 > 🚨 Treat the token like a password. Put it in environment variables / a local `.env`,
 > never paste it into chat or commit it.
@@ -52,6 +66,11 @@ test this whole workflow end to end. Think of it as a flight simulator for your 
 1. In the app dashboard, go to **Marketing API → Tools**.
 2. Find **Sandbox Ad Account Management** and create a new sandbox ad account.
 3. Copy its id — it looks like `act_1234567890`.
+
+> The sandbox account is **owned by this app**. If you later regenerate your token, generate it
+> from this same app (Step 2) or the sandbox will silently disappear from `/me/adaccounts`.
+> To publish Page-backed ads, give the token a role on your Page too (see the troubleshooting
+> note below), and reference the Page id in the creative's `object_story_spec`.
 
 ## Step 4 — Configure your environment
 
@@ -132,3 +151,23 @@ RUN_LIVE_TESTS=1 python -m pytest tests/test_live_sandbox.py -q
    ```
 
 See [LIVE_MODE.md](LIVE_MODE.md) for the full live reference, safety rules, and flag list.
+
+## Troubleshooting token & sandbox access
+
+Run `python -m meta_ads_pipeline doctor --live` first — it now inspects the token directly
+against the Graph API and names the exact failure. Common cases:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Malformed access token` (code 190) | Mis-pasted token (e.g. a stray leading `E` → `EEAA...`) | Re-copy the whole token; it must start with `EAA`. |
+| `Session has expired ...` (code 190, subcode 463) | Short-lived Explorer token expired (~1–2h) | Generate a fresh token, then exchange it for a long-lived one (Step 2.5). |
+| `(#200) Ad account owner has NOT grant ads_management or ads_read permission` | Token minted from the **wrong app**, or missing scopes | Generate the token from the **app that owns the sandbox**, as an Admin of that app, with `ads_management` + `ads_read`. |
+| `/me/adaccounts` returns only your personal `act_...`, not the sandbox | Same as above — wrong app | Same as above. The sandbox only appears for tokens from its owning app. |
+| `Object with ID 'act_...' does not exist ... missing permissions` on image upload / creative | The token can't see the ad account (so it can't see the account's image/creative endpoints either) | Fix account visibility first (rows above); the creative step works once `doctor --live` shows `sandbox_access: OK`. |
+
+**Page access (for publishing ads):** the creative references your Page by id. Confirm the
+token can act on the Page with
+`GET https://graph.facebook.com/v23.0/me/accounts?fields=id,name,tasks` — your Page should be
+listed with tasks including `ADVERTISE`, `CREATE_CONTENT`, and `MANAGE`. If the Page is owned by
+a Business, make sure the same Business (or you) also owns/has-access-to the app and sandbox so
+the Page and ad account live under one umbrella.
