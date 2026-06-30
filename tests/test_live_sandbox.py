@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from meta_ads_pipeline.adapters import _extract_id, build_live_env, is_sandbox_account, resolve_account
-from meta_ads_pipeline.doctor import classify_account_access, run_doctor
+from meta_ads_pipeline.doctor import classify_account_access, classify_page_access, run_doctor
 
 
 RUN_LIVE = os.environ.get("RUN_LIVE_TESTS") == "1" and bool(os.environ.get("ACCESS_TOKEN"))
@@ -86,6 +86,28 @@ class AccountAccessClassifierTest(unittest.TestCase):
         self.assertEqual(check["status"], "fail")
         self.assertIn("scopes", check["hint"])
         self.assertNotIn("add your user", check["hint"])
+
+
+class PageAccessClassifierTest(unittest.TestCase):
+    """Offline coverage for the doctor Page advertising-access mapping (no credentials)."""
+
+    def test_page_with_advertise_task_is_ok(self) -> None:
+        body = '{"id": "1074742885732865", "name": "My Page", "tasks": ["MODERATE", "ANALYZE", "ADVERTISE", "CREATE_CONTENT", "MANAGE"]}'
+        check = classify_page_access("1074742885732865", True, body)
+        self.assertEqual(check["status"], "ok")
+        self.assertIn("ADVERTISE", check["detail"])
+
+    def test_page_readable_without_advertise_task_is_warn(self) -> None:
+        body = '{"id": "1074742885732865", "name": "My Page", "tasks": ["ANALYZE"]}'
+        check = classify_page_access("1074742885732865", True, body)
+        self.assertEqual(check["status"], "warn")
+        self.assertIn("advertising", check["hint"].lower())
+
+    def test_page_not_accessible_is_fail(self) -> None:
+        body = '{"error": {"message": "Unsupported get request. Object does not exist or missing permissions", "code": 100}}'
+        check = classify_page_access("1074742885732865", False, body)
+        self.assertEqual(check["status"], "fail")
+        self.assertIn("manages this Page", check["hint"])
 
 
 @unittest.skipUnless(RUN_LIVE, "set RUN_LIVE_TESTS=1 and ACCESS_TOKEN to run live sandbox tests")

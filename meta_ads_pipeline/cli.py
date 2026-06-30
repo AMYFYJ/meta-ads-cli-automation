@@ -97,6 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="Preflight checks for live/sandbox readiness.")
     doctor.add_argument("--live", action="store_true", help="Also run a read-only token check against Meta.")
     doctor.add_argument("--account", default="", help="Override ad account id (act_...) for the check.")
+    doctor.add_argument("--page", default="", help="Page id to verify the token can advertise with (or set PAGE_ID).")
     doctor.add_argument("--json", action="store_true", help="Emit a machine-readable JSON report.")
     doctor.set_defaults(func=cmd_doctor)
     return parser
@@ -265,7 +266,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    report = run_doctor(live=args.live, account=args.account)
+    report = run_doctor(live=args.live, account=args.account, page=args.page)
     if args.json:
         print(json.dumps(report, indent=2))
         return 0 if report["ok"] else 1

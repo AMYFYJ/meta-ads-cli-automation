@@ -18,7 +18,7 @@ from .adapters import is_sandbox_account, redact_secrets, resolve_account
 from .schema import clean
 
 
-def run_doctor(live: bool = False, account: str = "") -> dict[str, Any]:
+def run_doctor(live: bool = False, account: str = "", page: str = "") -> dict[str, Any]:
     checks: list[dict[str, Any]] = [
         _check_python_version(),
         _check_meta_cli(),
@@ -28,6 +28,9 @@ def run_doctor(live: bool = False, account: str = "") -> dict[str, Any]:
     if live:
         checks.append(_check_token_readonly(account))
         checks.append(_check_account_access(account))
+        page_id = clean(page) or clean(os.environ.get("PAGE_ID"))
+        if page_id:
+            checks.append(_check_page_access(page_id))
     ok = all(check["status"] != "fail" for check in checks)
     return {"checks": checks, "ok": ok}
 
@@ -122,6 +125,32 @@ def _run(command: list[str], env: dict[str, str]):
     return completed.returncode == 0, completed.stderr, completed
 
 
+# Permission-family error markers (token has no role on the object). These also
+# carry type "OAuthException", so they must be matched *before* the token family.
+_PERMISSION_MARKERS = (
+    "(#200)",
+    "(#803)",
+    "has not grant",
+    "have not grant",
+    "does not grant",
+    "ads_management or ads_read",
+    "cannot be loaded due to missing",
+    "missing permission",
+    "does not have permission",
+    "do not have permission",
+    "does not exist",
+)
+# Invalid/expired/malformed token markers (the token itself is the problem).
+_TOKEN_MARKERS = (
+    "(#190)",
+    "session has expired",
+    "session is invalid",
+    "malformed access token",
+    "invalid oauth access token",
+    "access token could not be decrypted",
+)
+
+
 # Reconnect the sandbox account to your token. Shown whenever the token has no
 # ads role on the target account (the (#200)/"does not exist due to missing
 # permissions" family), which is the most common sandbox onboarding failure.
@@ -190,30 +219,9 @@ def classify_account_access(account_id: str, ok: bool, body: str) -> dict[str, A
     detail = _first_error_message(body) or "account read failed"
     # Order matters: permission errors also carry type "OAuthException", so the
     # reconnect family is matched before the generic token family.
-    reconnect_markers = (
-        "(#200)",
-        "(#803)",
-        "has not grant",
-        "have not grant",
-        "does not grant",
-        "ads_management or ads_read",
-        "cannot be loaded due to missing",
-        "missing permission",
-        "does not have permission",
-        "do not have permission",
-        "does not exist",
-    )
-    token_markers = (
-        "(#190)",
-        "session has expired",
-        "session is invalid",
-        "malformed access token",
-        "invalid oauth access token",
-        "access token could not be decrypted",
-    )
-    if any(marker in low for marker in reconnect_markers):
+    if any(marker in low for marker in _PERMISSION_MARKERS):
         return _check("account_access", "fail", f"Token cannot access {account_id}: {detail}", RECONNECT_HINT)
-    if any(marker in low for marker in token_markers):
+    if any(marker in low for marker in _TOKEN_MARKERS):
         return _check(
             "account_access",
             "fail",
@@ -222,6 +230,87 @@ def classify_account_access(account_id: str, ok: bool, body: str) -> dict[str, A
             "Regenerate it in the Graph API Explorer with those scopes. See docs/SANDBOX_SETUP.md.",
         )
     return _check("account_access", "fail", f"Account read failed for {account_id}: {detail}", redact_secrets(detail))
+
+
+def _check_page_access(page_id: str) -> dict[str, Any]:
+    """Verify the token can advertise with the given Page (for creatives/ads).
+
+    Publishing an ad needs ONE token that holds both the sandbox account and an
+    ADVERTISE role on the Page referenced by the creative. This reads the Page's
+    ``tasks`` (the current user's permission tasks) so a Page the token can see
+    but not advertise with is caught at preflight rather than at creative create.
+    """
+    token = clean(os.environ.get("ACCESS_TOKEN"))
+    if not token:
+        return _check("page_access", "fail", "ACCESS_TOKEN not set; cannot check Page access.", "Set ACCESS_TOKEN.")
+    from .adapters import with_retry  # local import to keep module import light
+
+    version = os.environ.get("META_API_VERSION", "v21.0")
+    query = urllib.parse.urlencode({"fields": "id,name,tasks", "access_token": token})
+    url = f"https://graph.facebook.com/{version}/{page_id}?{query}"
+    try:
+        result = with_retry(lambda: _graph_get(url))
+    except Exception as exc:  # noqa: BLE001 - network/URL errors become a FAIL with the raw reason.
+        result = (False, str(exc), None)
+    ok, body, _ = result if result else (False, "Page read produced no result.", None)
+    return classify_page_access(page_id, ok, body or "")
+
+
+def classify_page_access(page_id: str, ok: bool, body: str) -> dict[str, Any]:
+    """Map a Graph Page-read result into a doctor check (pure; unit-testable).
+
+    OK only when the Page reports an ADVERTISE/CREATE_CONTENT task for the token's
+    user; a readable Page without that task is a WARN (creatives will fail).
+    """
+    body = body or ""
+    if ok:
+        tasks = _page_tasks(body)
+        advertising = {"ADVERTISE", "CREATE_CONTENT"}
+        if tasks & advertising:
+            return _check("page_access", "ok", f"Token can advertise with Page {page_id} (tasks: {', '.join(sorted(tasks))}).")
+        if tasks:
+            return _check(
+                "page_access",
+                "warn",
+                f"Token sees Page {page_id} but lacks an advertising task (tasks: {', '.join(sorted(tasks))}).",
+                "Creatives need ADVERTISE/CREATE_CONTENT on the Page. Grant your user an advertising role on the Page.",
+            )
+        return _check(
+            "page_access",
+            "warn",
+            f"Token can read Page {page_id} but its tasks could not be confirmed.",
+            "Confirm your user has ADVERTISE/CREATE_CONTENT on the Page before creating creatives.",
+        )
+    low = body.lower()
+    detail = _first_error_message(body) or "page read failed"
+    if any(marker in low for marker in _PERMISSION_MARKERS):
+        return _check(
+            "page_access",
+            "fail",
+            f"Token cannot access Page {page_id}: {detail}",
+            "Use a token whose user manages this Page with an ADVERTISE/CREATE_CONTENT role, and request the "
+            "pages_show_list / pages_read_engagement scopes. The token must hold BOTH the sandbox account and the "
+            "Page. See docs/SANDBOX_SETUP.md (Troubleshooting).",
+        )
+    if any(marker in low for marker in _TOKEN_MARKERS):
+        return _check(
+            "page_access",
+            "fail",
+            f"Token rejected reading Page {page_id}: {detail}",
+            "Token is invalid/expired. Regenerate it (with page + ads scopes). See docs/SANDBOX_SETUP.md.",
+        )
+    return _check("page_access", "fail", f"Page read failed for {page_id}: {detail}", redact_secrets(detail))
+
+
+def _page_tasks(body: str) -> set[str]:
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError:
+        return set()
+    tasks = parsed.get("tasks") if isinstance(parsed, dict) else None
+    if isinstance(tasks, list):
+        return {str(task).upper() for task in tasks}
+    return set()
 
 
 def _first_error_message(body: str) -> str:
