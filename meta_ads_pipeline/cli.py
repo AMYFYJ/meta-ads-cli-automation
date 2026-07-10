@@ -58,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     apply.add_argument("--continue-on-error", action="store_true")
     apply.add_argument("--account", default="", help="Override ad account id (act_...) for this run.")
     apply.add_argument("--require-sandbox", action="store_true", help="Refuse live apply unless the target is the sandbox account.")
+    apply.add_argument("--force-paused", action="store_true", help="Refuse live apply if any action would set a status to ACTIVE.")
     apply.add_argument("--yes", action="store_true", help="Confirm execution.")
     apply.set_defaults(func=cmd_apply)
 
@@ -138,6 +139,45 @@ def cmd_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+_STATUS_KEYS = {"status", "desired_status", "status_option", "duplicate_status_option", "effective_status"}
+
+
+def _active_status_violations(actions: list[Any]) -> list[tuple[str, str]]:
+    """Return (action_id, where) for every planned action that would set a status to ACTIVE."""
+    violations: list[tuple[str, str]] = []
+    for action in actions:
+        for index, token in enumerate(action.command):
+            if token == "--status" and index + 1 < len(action.command) and str(action.command[index + 1]).upper() == "ACTIVE":
+                violations.append((action.action_id, "command --status ACTIVE"))
+        for name, mapping in (("body", action.body), ("params", action.params), ("payload", action.payload)):
+            path = _find_active_status(mapping)
+            if path:
+                violations.append((action.action_id, f"{name}.{path}"))
+    return violations
+
+
+def _find_active_status(value: Any, path: str = "") -> str:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = f"{path}.{key}" if path else str(key)
+            if str(key).lower() in _STATUS_KEYS and isinstance(child, str) and child.upper() == "ACTIVE":
+                return child_path
+            found = _find_active_status(child, child_path)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            found = _find_active_status(child, f"{path}[{index}]")
+            if found:
+                return found
+    elif isinstance(value, str) and value.strip().startswith(("{", "[")):
+        try:
+            return _find_active_status(json.loads(value), path)
+        except (ValueError, TypeError):
+            return ""
+    return ""
+
+
 def cmd_apply(args: argparse.Namespace) -> int:
     if not args.yes:
         print("Refusing to apply without --yes. Run plan first, then re-run apply with --yes.", file=sys.stderr)
@@ -160,6 +200,20 @@ def cmd_apply(args: argparse.Namespace) -> int:
         print(f"Wrote validation errors to {args.out_source}")
         return 1
     actions = build_plan(dataset)
+    if args.mode == "live":
+        force_paused = args.force_paused or os.environ.get("META_FORCE_PAUSED", "").lower() in {"1", "true", "yes", "on"}
+        if force_paused:
+            violations = _active_status_violations(actions)
+            if violations:
+                print(
+                    "Refusing live apply: force-paused is on (META_FORCE_PAUSED / --force-paused) and these actions "
+                    "would set a status to ACTIVE:",
+                    file=sys.stderr,
+                )
+                for action_id, where in violations:
+                    print(f"  - {action_id} ({where})", file=sys.stderr)
+                print("Set desired_status/status_option to PAUSED on those rows, then re-run.", file=sys.stderr)
+                return 2
     if args.plan_out:
         out = Path(args.plan_out)
         out.parent.mkdir(parents=True, exist_ok=True)
