@@ -277,7 +277,12 @@ def _validate_assets(dataset: Dataset) -> list[ValidationIssue]:
         creative_format = clean(row.get("format")).lower()
         if creative_format not in {"image", "video", "dco"}:
             issues.append(ValidationIssue("ERROR", "Creatives", key, "format", "Use image, video, or dco."))
-        if creative_format in {"image", "video"} and is_blank(row.get("asset_path_or_url")) and is_blank(row.get("image_hash_or_video_id")):
+        if (
+            creative_format in {"image", "video"}
+            and is_blank(row.get("meta_creative_id"))
+            and is_blank(row.get("asset_path_or_url"))
+            and is_blank(row.get("image_hash_or_video_id"))
+        ):
             issues.append(ValidationIssue("ERROR", "Creatives", key, "asset_path_or_url", "Asset path/URL or uploaded media ID/hash is required."))
     return issues
 

@@ -96,6 +96,20 @@ class PipelineTest(unittest.TestCase):
                 ["meta", "--output", "json", "--no-input", "ads", "--ad-account-id", "act_123"],
             )
 
+    def test_existing_creative_needs_no_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workbook = root / "template.xlsx"
+            ensure_sample_assets(str(root))
+            create_template(str(workbook), with_sample=True)
+            dataset = load_source(str(workbook))
+            creative = dataset.tables["Creatives"][0]
+            creative["meta_creative_id"] = "123456789"
+            creative["asset_path_or_url"] = ""
+            creative["image_hash_or_video_id"] = ""
+
+            self.assertFalse(has_blocking_errors(validate_dataset(dataset)))
+
     def test_campaign_bid_strategy_carried_via_graph_followup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

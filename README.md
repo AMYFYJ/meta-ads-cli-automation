@@ -13,11 +13,11 @@ This project turns a campaign planning workbook or SQLite database into a repeat
 
 ## Current Status
 
-As of July 9, 2026, the sandbox has been retired and live mode runs against a real ad account (forced `PAUSED` via `META_FORCE_PAUSED=1`):
+As of July 10, 2026, the sandbox has been retired and live mode runs against a real ad account (forced `PAUSED` via `META_FORCE_PAUSED=1`):
 
-- `doctor --live` passes; live applies create campaigns, ad sets, and creatives end to end.
+- `doctor --live` passes; a full campaign → ad set → ad tree has been published live end to end. See [docs/AD_CREATION_WORKFLOW.md](docs/AD_CREATION_WORKFLOW.md) for the recipe and [examples/build_ad_campaign.py](examples/build_ad_campaign.py) to generate a minimal source workbook.
 - Campaign creates carry the workbook's `bid_strategy` via a follow-up Graph call, and blank `bid_strategy` on CBO campaigns defaults to `LOWEST_COST_WITHOUT_CAP` (Highest Volume), so ad sets without bid amounts no longer fail with error 1815857.
-- Chained applies on an already-applied workbook keep `PublishLog` ids unique.
+- Chained applies on an already-applied workbook keep `PublishLog` ids unique, and creatives that already have a `meta_creative_id` no longer require an asset path to validate.
 
 ### Publishing ads requires billing
 
