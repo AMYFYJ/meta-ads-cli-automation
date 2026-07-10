@@ -13,21 +13,15 @@ This project turns a campaign planning workbook or SQLite database into a repeat
 
 ## Current Status
 
-As of June 24, 2026, the live sandbox path has been verified locally:
+As of July 9, 2026, the sandbox has been retired and live mode runs against a real ad account (forced `PAUSED` via `META_FORCE_PAUSED=1`):
 
-- The Meta access token validates with `meta ads adaccount list`.
-- The sandbox ad account is selected through `AD_ACCOUNT_ID`, `SANDBOX_AD_ACCOUNT_ID`, `META_SANDBOX=1`, and `META_REQUIRE_SANDBOX=1`.
-- `doctor --live` passes against the sandbox.
-- A campaign-only live apply created `Spring Launch | Sales | US` in the sandbox as `PAUSED`.
-- The applied workbook writes the new Meta campaign ID back into the `Campaigns` sheet and records the result in `PublishLog`.
+- `doctor --live` passes; live applies create campaigns, ad sets, and creatives end to end.
+- Campaign creates carry the workbook's `bid_strategy` via a follow-up Graph call, and blank `bid_strategy` on CBO campaigns defaults to `LOWEST_COST_WITHOUT_CAP` (Highest Volume), so ad sets without bid amounts no longer fail with error 1815857.
+- Chained applies on an already-applied workbook keep `PublishLog` ids unique.
 
-The next test is to build down the object tree one layer at a time:
+### Publishing ads requires billing
 
-1. Create an ad set under the sandbox campaign.
-2. Create a creative after the required Page, asset, and actor IDs are confirmed.
-3. Create an ad using the campaign, ad set, and creative IDs.
-4. Pull live sandbox insights and write them into `PerformanceSnapshots`.
-5. Run `optimize` against the insight rows and review generated `BulkChanges`.
+Meta refuses to create **ad** objects — even `PAUSED` ones — until the ad account has a valid payment method (API error 100: "Update payment method"). Campaigns, ad sets, and creatives are not affected. Before publishing ads, add a payment method under **Billing & payments → Payment settings** for the target ad account, confirm it appears in the payment methods list, then re-run `apply` on the applied workbook — only the missing ads will be planned.
 
 ## Quick Demo
 

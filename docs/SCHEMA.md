@@ -28,7 +28,7 @@ Important fields:
 - `meta_campaign_id`: Written back after publish.
 - `objective`: Meta outcome objective, e.g. `OUTCOME_SALES`.
 - `budget_mode`: `CBO` for campaign budget optimization, `ABO` for ad-set budgets.
-- `daily_budget_cents`, `lifetime_budget_cents`, `bid_strategy`: Budget strategy.
+- `daily_budget_cents`, `lifetime_budget_cents`, `bid_strategy`: Budget strategy. Leave `bid_strategy` blank on a CBO campaign to default to `LOWEST_COST_WITHOUT_CAP` (Highest Volume); ABO campaigns get no campaign-level default and set strategy per ad set.
 - `desired_status`: Default should be `PAUSED`.
 - `approval_status`: Must be `APPROVED` before creation.
 

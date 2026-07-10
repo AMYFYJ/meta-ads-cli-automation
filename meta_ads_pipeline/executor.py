@@ -22,6 +22,9 @@ def execute_actions(
     results: list[ActionResult] = []
     updates: list[tuple[str, str, str, Any]] = []
     logs: list[dict[str, Any]] = []
+    # Continue log numbering after existing rows so chained applies on an
+    # already-applied workbook do not produce duplicate log_id keys.
+    log_offset = len(dataset.tables.get("PublishLog", []))
 
     completed: set[str] = set()
     for action in actions:
@@ -36,7 +39,7 @@ def execute_actions(
             result = adapter.apply(action, context)
         results.append(result)
         updates.extend(result.updates)
-        logs.append(result.as_log_row(f"log_{len(logs) + 1:04d}", utc_now(), mode, payload_hash(action.payload)))
+        logs.append(result.as_log_row(f"log_{log_offset + len(logs) + 1:04d}", utc_now(), mode, payload_hash(action.payload)))
         if result.ok:
             completed.add(action.action_id)
         elif not continue_on_error:

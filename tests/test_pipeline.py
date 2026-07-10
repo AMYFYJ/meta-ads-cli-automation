@@ -30,7 +30,7 @@ class PipelineTest(unittest.TestCase):
             self.assertFalse(has_blocking_errors(issues), [issue.message for issue in issues])
 
             actions = build_plan(dataset)
-            self.assertEqual(len(actions), 19)
+            self.assertEqual(len(actions), 20)
             results, updates, append_rows = execute_actions(dataset, actions, mode="mock", state_path=str(state))
             self.assertTrue(all(result.ok for result in results), [result.message for result in results])
             save_with_updates(dataset, str(applied), updates, append_rows)
@@ -95,6 +95,76 @@ class PipelineTest(unittest.TestCase):
                 campaign_action.command[:7],
                 ["meta", "--output", "json", "--no-input", "ads", "--ad-account-id", "act_123"],
             )
+
+    def test_campaign_bid_strategy_carried_via_graph_followup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workbook = root / "template.xlsx"
+            ensure_sample_assets(str(root))
+            create_template(str(workbook), with_sample=True)
+
+            dataset = load_source(str(workbook))
+            campaign = dataset.tables["Campaigns"][0]
+            campaign["bid_strategy"] = "LOWEST_COST_WITHOUT_CAP"
+
+            actions = build_plan(dataset)
+            create = next(action for action in actions if action.action_id == "010_create_campaign_cmp_spring_launch")
+            followup = next(
+                action for action in actions if action.action_id == "011_set_campaign_bid_strategy_cmp_spring_launch"
+            )
+            self.assertEqual(followup.executor, "graph")
+            self.assertEqual(followup.method, "POST")
+            self.assertEqual(followup.endpoint, "${campaign:cmp_spring_launch}")
+            self.assertEqual(followup.body, {"bid_strategy": "LOWEST_COST_WITHOUT_CAP"})
+            self.assertEqual(followup.depends_on, ["010_create_campaign_cmp_spring_launch"])
+            self.assertGreater(actions.index(followup), actions.index(create))
+
+            campaign["bid_strategy"] = ""
+            defaulted = next(
+                action
+                for action in build_plan(dataset)
+                if action.action_id == "011_set_campaign_bid_strategy_cmp_spring_launch"
+            )
+            self.assertEqual(defaulted.body, {"bid_strategy": "LOWEST_COST_WITHOUT_CAP"})
+
+            campaign["bid_strategy"] = "COST_CAP"
+            explicit = next(
+                action
+                for action in build_plan(dataset)
+                if action.action_id == "011_set_campaign_bid_strategy_cmp_spring_launch"
+            )
+            self.assertEqual(explicit.body, {"bid_strategy": "COST_CAP"})
+
+            campaign["bid_strategy"] = ""
+            campaign["budget_mode"] = "ABO"
+            abo_actions = build_plan(dataset)
+            self.assertFalse(
+                [action for action in abo_actions if action.action_id.startswith("011_set_campaign_bid_strategy_")]
+            )
+
+    def test_chained_applies_keep_publish_log_ids_unique(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workbook = root / "template.xlsx"
+            applied = root / "applied.xlsx"
+            reapplied = root / "reapplied.xlsx"
+            state = root / "state.json"
+            ensure_sample_assets(str(root))
+            create_template(str(workbook), with_sample=True)
+            dataset = load_source(str(workbook))
+            _, updates, append_rows = execute_actions(dataset, build_plan(dataset), mode="mock", state_path=str(state))
+            save_with_updates(dataset, str(applied), updates, append_rows)
+
+            applied_dataset = load_source(str(applied))
+            applied_dataset.tables["Ads"][0]["meta_ad_id"] = ""
+            actions = build_plan(applied_dataset)
+            self.assertTrue(actions)
+            _, updates, append_rows = execute_actions(applied_dataset, actions, mode="mock", state_path=str(state))
+            save_with_updates(applied_dataset, str(reapplied), updates, append_rows)
+
+            log_ids = [row["log_id"] for row in load_source(str(reapplied)).tables["PublishLog"]]
+            self.assertEqual(len(log_ids), len(set(log_ids)))
+            self.assertFalse(has_blocking_errors(validate_dataset(load_source(str(reapplied)))))
 
     def test_sqlite_template_uses_same_schema(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

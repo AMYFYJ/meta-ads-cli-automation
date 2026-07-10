@@ -213,8 +213,10 @@ def _campaign_actions(dataset: Dataset) -> list[Action]:
         command = _meta_prefix(accounts.get(account_key, {})) + ["campaign", "create"]
         _extend(command, "--name", row.get("name"))
         _extend(command, "--objective", row.get("objective"))
+        campaign_budget = True
         if clean(row.get("budget_mode")).upper() == "ABO":
             command.append("--adset-budget-sharing")
+            campaign_budget = False
         else:
             _extend(command, "--daily-budget", row.get("daily_budget_cents"))
             _extend(command, "--lifetime-budget", row.get("lifetime_budget_cents"))
@@ -233,6 +235,34 @@ def _campaign_actions(dataset: Dataset) -> list[Action]:
                 source_key=key,
             )
         )
+        bid_strategy = clean(row.get("bid_strategy"))
+        if not bid_strategy and campaign_budget:
+            # Default to Highest Volume; campaign-level bid_strategy only
+            # applies when the campaign holds the budget (CBO), so ABO rows
+            # get no default and set strategy per ad set instead.
+            bid_strategy = "LOWEST_COST_WITHOUT_CAP"
+        if bid_strategy:
+            # The meta CLI has no bid-strategy flag on campaign create, so Meta
+            # defaults to LOWEST_COST_WITH_BID_CAP; set the strategy via Graph.
+            campaign_ref = placeholder("campaign", key)
+            actions.append(
+                Action(
+                    action_id=f"011_set_campaign_bid_strategy_{key}",
+                    operation="update",
+                    object_type="campaign",
+                    object_key=key,
+                    command=["GRAPH", "POST", campaign_ref],
+                    payload={"row": row, "field": "bid_strategy", "new_value": bid_strategy, "target": key},
+                    executor="graph",
+                    method="POST",
+                    endpoint=campaign_ref,
+                    body={"bid_strategy": bid_strategy},
+                    depends_on=[f"010_create_campaign_{key}"],
+                    reason="Campaign row specifies a bid strategy the CLI create cannot set.",
+                    source_table="Campaigns",
+                    source_key=key,
+                )
+            )
     return actions
 
 
