@@ -260,9 +260,9 @@ class MockMetaAdapter:
             }
         )
         updates = [
-            ("AudienceUploads", action.source_key, "applied_at", utc_now()),
-            ("AudienceUploads", action.source_key, "result", f"MOCK_UPLOADED_{uploaded}_ROWS"),
-            ("AudienceUploads", action.source_key, "error", ""),
+            ("Audiences", action.source_key, "upload_applied_at", utc_now()),
+            ("Audiences", action.source_key, "upload_result", f"MOCK_UPLOADED_{uploaded}_ROWS"),
+            ("Audiences", action.source_key, "upload_error", ""),
         ]
         return ActionResult(
             action=action,
@@ -289,10 +289,9 @@ class MockMetaAdapter:
                 "created_at": utc_now(),
             }
         updates = [
-            ("DuplicateJobs", action.source_key, "applied_at", utc_now()),
-            ("DuplicateJobs", action.source_key, "result_meta_ids", ",".join(copied_ids)),
-            ("DuplicateJobs", action.source_key, "result", "MOCK_DUPLICATED"),
-            ("DuplicateJobs", action.source_key, "error", ""),
+            ("BulkChanges", action.source_key, "applied_at", utc_now()),
+            ("BulkChanges", action.source_key, "result", f"MOCK_DUPLICATED:{','.join(copied_ids)}"),
+            ("BulkChanges", action.source_key, "error", ""),
         ]
         return ActionResult(
             action=action,

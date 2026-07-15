@@ -14,3 +14,6 @@ state/
 *.log
 .DS_Store
 ~$*
+
+# Live workbook + archives (real account/page/pixel IDs) stay local
+data/

@@ -23,13 +23,10 @@ Show the workbook tabs:
 
 - `Accounts`: account/business setup.
 - `Campaigns`: campaign shell and CBO/ABO budget strategy.
-- `AdSets`: targeting, conversion event, bid caps, flight dates.
-- `Audiences` / `AudienceUploads`: custom, lookalike, website, saved audiences, and CRM uploads.
-- `TargetingPresets` / `AutomationSettings`: reusable audiences plus Advantage+ toggles.
-- `Creatives`: copy, CTA, URL, asset references.
-- `Ads`: ad set to creative mapping.
-- `DuplicateJobs`: campaign/ad set/ad copy jobs.
-- `BulkChanges`: approved updates.
+- `AdSets`: the complete ad set — budgets, bids, flight dates, full audience targeting (geo, age, gender, interests, custom audiences), placements, and Advantage+ toggles.
+- `Ads`: the complete ad — copy, CTA, URL, asset, and the resulting creative/ad IDs.
+- `Audiences`: custom, lookalike, website, saved audiences, with CRM uploads on the same row.
+- `BulkChanges`: approved updates, creative swaps, and duplicate jobs.
 - `OptimizationRules`: rules that create bulk changes from performance.
 - `PublishLog`: audit log.
 - `PerformanceSnapshots`: reporting feed.

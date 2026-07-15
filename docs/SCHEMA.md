@@ -38,14 +38,22 @@ One row per ad set.
 
 Important fields:
 
+One row per ad set carries everything: delivery setup, the full audience, placements, and Advantage+ toggles.
+
 - `adset_key`, `campaign_key`, `meta_adset_id`.
-- `optimization_goal`, `billing_event`, `bid_amount_cents`.
+- `optimization_goal`, `billing_event`, `bid_amount_cents`, `bid_strategy`.
 - `daily_budget_cents`, `lifetime_budget_cents`: Use when campaign is `ABO`.
 - `start_time`, `end_time`: ISO date-times with timezone offset.
-- `countries`, `regions`, `age_min`, `age_max`, `genders`, `placements`.
-- `custom_audiences`, `excluded_audiences`, `interests`.
+- Location: `countries`, `regions`, `cities`, `zips`.
+- Demographics: `age_min`, `age_max`, `genders`, `languages`.
+- Detailed targeting: `interests`, `behaviors` (as `<id>:<Name>`), `flexible_spec_json` (AND-groups), `exclusions_json`.
+- Audiences: `custom_audiences`, `excluded_audiences` (audience_key from the Audiences tab or a Meta audience ID).
+- Placements: `placements` (publisher platforms or `automatic`), `facebook_positions`, `instagram_positions`, `device_platforms`.
+- Advantage+ toggles: `advantage_audience`, `detailed_targeting_expansion`, `custom_audience_expansion`, `advantage_placements` (TRUE/FALSE).
 - `pixel_dataset_id`, `pixel_event`, `attribution_window`.
-- `targeting_preset_key`, `targeting_json`, `targeting_automation_json`, `promoted_object_json`: advanced targeting and Advantage+ controls that use the Graph API path.
+- `targeting_json`, `targeting_automation_json`, `promoted_object_json`: raw Graph API overrides, merged last.
+
+See [TARGETING.md](TARGETING.md) for formats and examples.
 
 ### Audiences
 
@@ -59,68 +67,22 @@ Important fields:
 - `rule_json`, `retention_days`, `pixel_dataset_id`: website/pixel audiences.
 - `targeting_json`: saved audience targeting.
 
-### AudienceUploads
-
-Upload rows into customer-list custom audiences.
-
-Important fields:
-
-- `upload_key`, `audience_key`, `operation`: `ADD`, `REMOVE`, or `REPLACE`.
-- `schema`, `data_path`, `data_json`, `hash_type`.
-
-### TargetingPresets
-
-Reusable targeting bundles for ad sets.
-
-Important fields:
-
-- `countries`, `regions`, `cities`, `zips`, `age_min`, `age_max`, `genders`.
-- `custom_audience_keys`, `excluded_audience_keys`.
-- `placements`, `publisher_platforms`, `facebook_positions`, `instagram_positions`, `device_platforms`.
-- `targeting_json` for raw Graph API targeting overrides.
-
-### AutomationSettings
-
-Approved toggles for Advantage+ and automation settings.
-
-Important fields:
-
-- `object_level`, `object_key`.
-- `advantage_audience`, `detailed_targeting_expansion`, `custom_audience_expansion`, `advantage_placements`.
-- `targeting_automation_json`, `creative_features_json`.
-
-### Creatives
-
-One row per creative concept/variant.
-
-Important fields:
-
-- `creative_key`, `account_key`, `meta_creative_id`.
-- `format`: `image`, `video`, or `dco`.
-- `asset_path_or_url`, `image_hash_or_video_id`.
-- `primary_text`, `headline`, `description`, `cta`.
-- `destination_url`, `utm_template`.
-- `creative_angle`, `variant_label`, `compliance_notes`.
+Customer-list uploads live on the same row via `upload_operation` (`ADD`/`REMOVE`/`REPLACE`), `upload_schema`, `upload_data_path` or `upload_data_json`, and `upload_hash_type`; results land in `upload_applied_at`/`upload_result`/`upload_error`.
 
 ### Ads
 
-One row per ad object that links an ad set to a creative.
+One row per ad, including its creative inline — everything an ad needs lives here.
 
 Important fields:
 
-- `ad_key`, `adset_key`, `creative_key`, `meta_ad_id`.
-- `tracking_specs`, `url_tags`.
+- `ad_key`, `adset_key`, `meta_ad_id`, `meta_creative_id`.
+- Creative: `format` (`image`, `video`, `dco`), `asset_path_or_url`, `image_hash_or_video_id`.
+- Copy: `primary_text`, `headline`, `description`, `cta`, `destination_url`.
+- Tracking: `url_tags`, `utm_template`, `tracking_specs`.
+- `page_id`, `instagram_actor_id` (blank falls back to the account row), `variant_label`.
 - `desired_status`, `launch_batch`, `approval_status`.
 
-### DuplicateJobs
-
-Duplicate campaigns, ad sets, or ads.
-
-Important fields:
-
-- `object_level`, `source_key_or_meta_id`, `destination_parent_key_or_meta_id`.
-- `copy_count`, `deep_copy`, `status_option`, `rename_strategy`, `name_prefix`, `name_suffix`.
-- `overrides_json` for post-copy payload values.
+Leave `meta_creative_id` blank and the pipeline builds the creative from the row before creating the ad; fill it in (from Meta or another ad row's result) to reuse an existing creative — the copy/asset fields are then optional.
 
 ## Operations Tables
 
@@ -135,7 +97,8 @@ Use cases:
 - Bid cap changes: `object_level=adset`, `field=bid_amount_cents`.
 - Flight date changes: `object_level=adset`, `field=start_time` or `field=end_time`.
 - Status changes: `field=desired_status` with `new_value=ACTIVE` or `PAUSED`.
-- Creative swaps: `object_level=ad`, `field=creative_key`, `new_value=<creative_key>`.
+- Creative swaps: `object_level=ad`, `operation=REPLACE_CREATIVE`, `new_value=<other ad_key or creative ID>`.
+- Duplicates: `operation=DUPLICATE`, `new_value=<copy count>`, optional `value_json` overrides (deep_copy, rename_options, destination).
 - Raw advanced updates: `operation=PATCH_JSON`, `value_json=<Graph API payload>`.
 
 The pipeline applies only approved, unapplied rows.

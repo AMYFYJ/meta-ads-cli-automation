@@ -50,20 +50,6 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     slug = args.name.lower().replace(" ", "_")
-    creative_row = {
-        "creative_key": f"creative_{slug}_a",
-        "account_key": "acct_main",
-        "meta_creative_id": args.creative_id,
-        "name": f"{args.name} Creative A",
-        "format": "image",
-        "asset_path_or_url": args.image,
-        "primary_text": args.primary_text,
-        "headline": args.headline,
-        "cta": "LEARN_MORE",
-        "destination_url": args.link_url,
-        "page_id": args.page_id,
-        "approval_status": "APPROVED",
-    }
     rows = {
         "Accounts": [{
             "account_key": "acct_main",
@@ -102,12 +88,18 @@ def main(argv: list[str] | None = None) -> int:
             "desired_status": "PAUSED",
             "approval_status": "APPROVED",
         }],
-        "Creatives": [creative_row],
         "Ads": [{
             "ad_key": f"ad_{slug}_a",
             "adset_key": f"adset_{slug}",
-            "creative_key": f"creative_{slug}_a",
+            "meta_creative_id": args.creative_id,
             "name": f"{args.name} | Static A",
+            "format": "image",
+            "asset_path_or_url": args.image,
+            "primary_text": args.primary_text,
+            "headline": args.headline,
+            "cta": "LEARN_MORE",
+            "destination_url": args.link_url,
+            "page_id": args.page_id,
             "desired_status": "PAUSED",
             "approval_status": "APPROVED",
         }],

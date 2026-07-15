@@ -38,21 +38,37 @@ class TargetingAutomationTest(unittest.TestCase):
             self.assertEqual(retargeting.body["targeting"]["publisher_platforms"], ["facebook", "instagram"])
             self.assertEqual(
                 retargeting.body["targeting"]["custom_audiences"],
-                [{"id": "${audience:aud_site_visitors_30d}"}, {"id": "site_visitors_180d"}],
+                [{"id": "${audience:aud_site_visitors_30d}"}],
+            )
+            self.assertEqual(
+                retargeting.body["targeting"]["excluded_custom_audiences"],
+                [{"id": "${audience:aud_vip_buyers}"}],
+            )
+            self.assertIn("015_create_audience_aud_site_visitors_30d", retargeting.depends_on)
+            self.assertIn("015_create_audience_aud_vip_buyers", retargeting.depends_on)
+            self.assertEqual(
+                prospecting.body["targeting"]["interests"],
+                [{"id": "6003306084421", "name": "Yoga"}, {"id": "6003384248805", "name": "Fitness and wellness"}],
             )
 
-    def test_invalid_targeting_preset_reference_is_blocking(self) -> None:
+    def test_advantage_placement_toggle_strips_manual_placements(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             workbook = root / "template.xlsx"
             ensure_sample_assets(str(root))
             create_template(str(workbook), with_sample=True)
             dataset = load_source(str(workbook))
-            dataset.tables["AdSets"][0]["targeting_preset_key"] = "missing_preset"
+            adset = dataset.tables["AdSets"][1]  # retargeting: manual placements
+            adset["advantage_placements"] = "TRUE"
 
-            issues = validate_dataset(dataset)
+            actions = build_plan(dataset)
+            retargeting = next(
+                action for action in actions
+                if action.object_type == "adset" and action.object_key == "adset_retargeting_us"
+            )
 
-            self.assertTrue(any(issue.table == "AdSets" and issue.field == "targeting_preset_key" for issue in issues))
+            for field in ("publisher_platforms", "facebook_positions", "instagram_positions", "device_platforms"):
+                self.assertNotIn(field, retargeting.body["targeting"])
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ class PipelineTest(unittest.TestCase):
             self.assertFalse(has_blocking_errors(issues), [issue.message for issue in issues])
 
             actions = build_plan(dataset)
-            self.assertEqual(len(actions), 20)
+            self.assertEqual(len(actions), 18)
             results, updates, append_rows = execute_actions(dataset, actions, mode="mock", state_path=str(state))
             self.assertTrue(all(result.ok for result in results), [result.message for result in results])
             save_with_updates(dataset, str(applied), updates, append_rows)
@@ -50,8 +50,7 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(applied_dataset.tables["Campaigns"][0]["daily_budget_cents"], "7500")
             self.assertEqual(applied_dataset.tables["AdSets"][0]["bid_amount_cents"], "1500")
             self.assertEqual(applied_dataset.tables["BulkChanges"][0]["result"], "MOCK_UPDATED")
-            self.assertTrue(applied_dataset.tables["AudienceUploads"][0]["result"].startswith("MOCK_UPLOADED_"))
-            self.assertEqual(applied_dataset.tables["DuplicateJobs"][0]["result"], "MOCK_DUPLICATED")
+            self.assertTrue(applied_dataset.tables["Audiences"][0]["upload_result"].startswith("MOCK_UPLOADED_"))
 
             state_data = json.loads(state.read_text(encoding="utf-8"))
             self.assertIn("cmp_spring_launch", state_data["ids"]["campaign"])
@@ -103,10 +102,10 @@ class PipelineTest(unittest.TestCase):
             ensure_sample_assets(str(root))
             create_template(str(workbook), with_sample=True)
             dataset = load_source(str(workbook))
-            creative = dataset.tables["Creatives"][0]
-            creative["meta_creative_id"] = "123456789"
-            creative["asset_path_or_url"] = ""
-            creative["image_hash_or_video_id"] = ""
+            ad = dataset.tables["Ads"][0]
+            ad["meta_creative_id"] = "123456789"
+            ad["asset_path_or_url"] = ""
+            ad["image_hash_or_video_id"] = ""
 
             self.assertFalse(has_blocking_errors(validate_dataset(dataset)))
 

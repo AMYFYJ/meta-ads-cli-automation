@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.amyfang.ads-agent.scan</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/amyfang/Documents/Meta CLI/.venv/bin/python</string>
+        <string>-m</string>
+        <string>ads_agent</string>
+        <string>scan</string>
+        <string>--mode</string>
+        <string>live</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/amyfang/Documents/Meta CLI</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>8</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/amyfang/Documents/Meta CLI/outputs/logs/agent-scan.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/amyfang/Documents/Meta CLI/outputs/logs/agent-scan.err.log</string>
+
+    <!-- launchd's default PATH is minimal; the Claude Agent SDK needs node on PATH. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/opt/homebrew/opt/node@20/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>

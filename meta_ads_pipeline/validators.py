@@ -72,8 +72,6 @@ def _validate_relationships(dataset: Dataset) -> list[ValidationIssue]:
     audience_keys = _keys(dataset, "Audiences")
     campaign_keys = _keys(dataset, "Campaigns")
     adset_keys = _keys(dataset, "AdSets")
-    creative_keys = _keys(dataset, "Creatives")
-    targeting_preset_keys = _keys(dataset, "TargetingPresets")
 
     for row in dataset.tables.get("Campaigns", []):
         key = row_key("Campaigns", row)
@@ -83,13 +81,6 @@ def _validate_relationships(dataset: Dataset) -> list[ValidationIssue]:
         key = row_key("AdSets", row)
         if clean(row.get("campaign_key")) not in campaign_keys:
             issues.append(ValidationIssue("ERROR", "AdSets", key, "campaign_key", "No matching Campaigns row."))
-        preset_key = clean(row.get("targeting_preset_key"))
-        if preset_key and preset_key not in targeting_preset_keys:
-            issues.append(ValidationIssue("ERROR", "AdSets", key, "targeting_preset_key", "No matching TargetingPresets row."))
-    for row in dataset.tables.get("Creatives", []):
-        key = row_key("Creatives", row)
-        if clean(row.get("account_key")) not in account_keys:
-            issues.append(ValidationIssue("ERROR", "Creatives", key, "account_key", "No matching Accounts row."))
     for row in dataset.tables.get("Audiences", []):
         key = row_key("Audiences", row)
         if clean(row.get("account_key")) not in account_keys:
@@ -97,59 +88,10 @@ def _validate_relationships(dataset: Dataset) -> list[ValidationIssue]:
         source_key = clean(row.get("source_audience_key"))
         if source_key and source_key not in audience_keys:
             issues.append(ValidationIssue("ERROR", "Audiences", key, "source_audience_key", "No matching source Audiences row."))
-    for row in dataset.tables.get("AudienceUploads", []):
-        key = row_key("AudienceUploads", row)
-        if clean(row.get("audience_key")) not in audience_keys:
-            issues.append(ValidationIssue("ERROR", "AudienceUploads", key, "audience_key", "No matching Audiences row."))
     for row in dataset.tables.get("Ads", []):
         key = row_key("Ads", row)
         if clean(row.get("adset_key")) not in adset_keys:
             issues.append(ValidationIssue("ERROR", "Ads", key, "adset_key", "No matching AdSets row."))
-        if clean(row.get("creative_key")) not in creative_keys:
-            issues.append(ValidationIssue("ERROR", "Ads", key, "creative_key", "No matching Creatives row."))
-    for row in dataset.tables.get("TargetingPresets", []):
-        key = row_key("TargetingPresets", row)
-        if clean(row.get("account_key")) not in account_keys:
-            issues.append(ValidationIssue("ERROR", "TargetingPresets", key, "account_key", "No matching Accounts row."))
-        for audience_key in _csv_values(row.get("custom_audience_keys")) + _csv_values(row.get("excluded_audience_keys")):
-            if audience_key not in audience_keys:
-                issues.append(ValidationIssue("ERROR", "TargetingPresets", key, "custom_audience_keys", f"No matching Audiences row for {audience_key}."))
-    valid_automation_targets = {
-        "campaign": campaign_keys,
-        "adset": adset_keys,
-        "creative": creative_keys,
-        "ad": _keys(dataset, "Ads"),
-    }
-    for row in dataset.tables.get("AutomationSettings", []):
-        key = row_key("AutomationSettings", row)
-        object_level = clean(row.get("object_level")).lower()
-        object_key = clean(row.get("object_key"))
-        if object_level not in valid_automation_targets:
-            issues.append(ValidationIssue("ERROR", "AutomationSettings", key, "object_level", "Use campaign, adset, creative, or ad."))
-        elif object_key not in valid_automation_targets[object_level]:
-            issues.append(ValidationIssue("ERROR", "AutomationSettings", key, "object_key", f"No matching {object_level} row."))
-    duplicate_sources = {
-        "campaign": campaign_keys,
-        "adset": adset_keys,
-        "ad": _keys(dataset, "Ads"),
-    }
-    duplicate_destination_parents = {
-        "campaign": account_keys,
-        "adset": campaign_keys,
-        "ad": adset_keys,
-    }
-    for row in dataset.tables.get("DuplicateJobs", []):
-        key = row_key("DuplicateJobs", row)
-        object_level = clean(row.get("object_level")).lower()
-        source = clean(row.get("source_key_or_meta_id"))
-        destination = clean(row.get("destination_parent_key_or_meta_id"))
-        if object_level not in duplicate_sources:
-            issues.append(ValidationIssue("ERROR", "DuplicateJobs", key, "object_level", "Use campaign, adset, or ad."))
-            continue
-        if source not in duplicate_sources[object_level] and not _looks_like_meta_id(source):
-            issues.append(ValidationIssue("ERROR", "DuplicateJobs", key, "source_key_or_meta_id", f"No matching source {object_level} row."))
-        if destination and destination not in duplicate_destination_parents[object_level] and not _looks_like_meta_id(destination):
-            issues.append(ValidationIssue("ERROR", "DuplicateJobs", key, "destination_parent_key_or_meta_id", "Destination parent is not a known key or Meta ID."))
     return issues
 
 
@@ -175,6 +117,7 @@ def _validate_values(dataset: Dataset) -> list[ValidationIssue]:
         _budget_guard(issues, "Campaigns", key, "daily_budget_cents", row.get("daily_budget_cents"))
         _budget_guard(issues, "Campaigns", key, "lifetime_budget_cents", row.get("lifetime_budget_cents"))
         _approval_guard(issues, "Campaigns", key, row)
+    audience_rows = {row_key("Audiences", row): row for row in dataset.tables.get("Audiences", [])}
     for row in dataset.tables.get("AdSets", []):
         key = row_key("AdSets", row)
         _budget_guard(issues, "AdSets", key, "daily_budget_cents", row.get("daily_budget_cents"))
@@ -185,20 +128,10 @@ def _validate_values(dataset: Dataset) -> list[ValidationIssue]:
         _json_guard(issues, "AdSets", key, "targeting_json", row.get("targeting_json"))
         _json_guard(issues, "AdSets", key, "targeting_automation_json", row.get("targeting_automation_json"))
         _json_guard(issues, "AdSets", key, "promoted_object_json", row.get("promoted_object_json"))
+        _targeting_columns_guard(issues, "AdSets", key, row)
+        for field in ("custom_audiences", "excluded_audiences"):
+            _audience_refs_guard(issues, "AdSets", key, field, row.get(field), audience_rows)
         _approval_guard(issues, "AdSets", key, row)
-    for row in dataset.tables.get("Creatives", []):
-        key = row_key("Creatives", row)
-        destination = clean(row.get("destination_url"))
-        if destination and not destination.startswith(("https://", "http://")):
-            issues.append(ValidationIssue("ERROR", "Creatives", key, "destination_url", "Destination URL must start with http:// or https://."))
-        _approval_guard(issues, "Creatives", key, row)
-        asset = clean(row.get("asset_path_or_url"))
-        if asset and not asset.startswith(("http://", "https://")):
-            path = Path(asset)
-            if not path.is_absolute():
-                path = source_dir / path
-            if not path.exists():
-                issues.append(ValidationIssue("ERROR", "Creatives", key, "asset_path_or_url", f"Asset does not exist: {path}."))
     for row in dataset.tables.get("Audiences", []):
         key = row_key("Audiences", row)
         audience_type = clean(row.get("audience_type")).upper()
@@ -214,43 +147,8 @@ def _validate_values(dataset: Dataset) -> list[ValidationIssue]:
         _json_guard(issues, "Audiences", key, "targeting_json", row.get("targeting_json"))
         _json_guard(issues, "Audiences", key, "rule_json", row.get("rule_json"))
         _json_guard(issues, "Audiences", key, "lookalike_spec_json", row.get("lookalike_spec_json"))
+        _audience_upload_guard(issues, key, row, source_dir)
         _approval_guard(issues, "Audiences", key, row)
-    for row in dataset.tables.get("AudienceUploads", []):
-        key = row_key("AudienceUploads", row)
-        operation = clean(row.get("operation")).upper()
-        if operation and operation not in AUDIENCE_UPLOAD_OPERATIONS:
-            issues.append(ValidationIssue("ERROR", "AudienceUploads", key, "operation", "Use ADD, REMOVE, or REPLACE."))
-        data_path = clean(row.get("data_path"))
-        if data_path:
-            path = Path(data_path)
-            if not path.is_absolute():
-                path = source_dir / path
-            if not path.exists():
-                issues.append(ValidationIssue("ERROR", "AudienceUploads", key, "data_path", f"Upload file does not exist: {path}."))
-        if not data_path and is_blank(row.get("data_json")):
-            issues.append(ValidationIssue("ERROR", "AudienceUploads", key, "data_json", "Provide data_path or data_json."))
-        _json_guard(issues, "AudienceUploads", key, "data_json", row.get("data_json"))
-        if not approved(row.get("approval_status")):
-            issues.append(ValidationIssue("INFO", "AudienceUploads", key, "approval_status", "Audience upload is not approved and will not apply."))
-    for row in dataset.tables.get("TargetingPresets", []):
-        key = row_key("TargetingPresets", row)
-        _json_guard(issues, "TargetingPresets", key, "targeting_json", row.get("targeting_json"))
-        if not approved(row.get("approval_status")):
-            issues.append(ValidationIssue("INFO", "TargetingPresets", key, "approval_status", "Targeting preset is not approved and will not be used."))
-    for row in dataset.tables.get("AutomationSettings", []):
-        key = row_key("AutomationSettings", row)
-        _json_guard(issues, "AutomationSettings", key, "targeting_automation_json", row.get("targeting_automation_json"))
-        _json_guard(issues, "AutomationSettings", key, "creative_features_json", row.get("creative_features_json"))
-        if not approved(row.get("approval_status")):
-            issues.append(ValidationIssue("INFO", "AutomationSettings", key, "approval_status", "Automation settings row is not approved and will not be applied."))
-    for row in dataset.tables.get("DuplicateJobs", []):
-        key = row_key("DuplicateJobs", row)
-        copy_count = to_int(row.get("copy_count"))
-        if copy_count is None or copy_count <= 0:
-            issues.append(ValidationIssue("ERROR", "DuplicateJobs", key, "copy_count", "Copy count must be a positive integer."))
-        _json_guard(issues, "DuplicateJobs", key, "overrides_json", row.get("overrides_json"))
-        if not approved(row.get("approval_status")):
-            issues.append(ValidationIssue("INFO", "DuplicateJobs", key, "approval_status", "Duplicate job is not approved and will not apply."))
     for row in dataset.tables.get("OptimizationRules", []):
         key = row_key("OptimizationRules", row)
         if clean(row.get("operator")) not in OPTIMIZATION_OPERATORS:
@@ -266,25 +164,63 @@ def _validate_values(dataset: Dataset) -> list[ValidationIssue]:
     for row in dataset.tables.get("Ads", []):
         key = row_key("Ads", row)
         _status_guard(issues, "Ads", key, row.get("desired_status"))
+        destination = clean(row.get("destination_url"))
+        if destination and not destination.startswith(("https://", "http://")):
+            issues.append(ValidationIssue("ERROR", "Ads", key, "destination_url", "Destination URL must start with http:// or https://."))
         _approval_guard(issues, "Ads", key, row)
     return issues
 
 
 def _validate_assets(dataset: Dataset) -> list[ValidationIssue]:
+    """Creative fields live inline on Ads rows; they are only required when the
+    row does not already reference an existing creative via meta_creative_id."""
     issues: list[ValidationIssue] = []
-    for row in dataset.tables.get("Creatives", []):
-        key = row_key("Creatives", row)
+    source_dir = _source_dir(dataset)
+    for row in dataset.tables.get("Ads", []):
+        key = row_key("Ads", row)
+        if not is_blank(row.get("meta_creative_id")):
+            continue
         creative_format = clean(row.get("format")).lower()
         if creative_format not in {"image", "video", "dco"}:
-            issues.append(ValidationIssue("ERROR", "Creatives", key, "format", "Use image, video, or dco."))
+            issues.append(ValidationIssue("ERROR", "Ads", key, "format", "Use image, video, or dco."))
+        for field in ("primary_text", "headline", "cta", "destination_url"):
+            if is_blank(row.get(field)):
+                issues.append(ValidationIssue("ERROR", "Ads", key, field, "Required to build this ad's creative (or set meta_creative_id to reuse one)."))
+        asset = clean(row.get("asset_path_or_url"))
         if (
             creative_format in {"image", "video"}
-            and is_blank(row.get("meta_creative_id"))
-            and is_blank(row.get("asset_path_or_url"))
+            and is_blank(asset)
             and is_blank(row.get("image_hash_or_video_id"))
         ):
-            issues.append(ValidationIssue("ERROR", "Creatives", key, "asset_path_or_url", "Asset path/URL or uploaded media ID/hash is required."))
+            issues.append(ValidationIssue("ERROR", "Ads", key, "asset_path_or_url", "Asset path/URL or uploaded media ID/hash is required."))
+        if asset and not asset.startswith(("http://", "https://")):
+            path = Path(asset)
+            if not path.is_absolute():
+                path = source_dir / path
+            if not path.exists():
+                issues.append(ValidationIssue("ERROR", "Ads", key, "asset_path_or_url", f"Asset does not exist: {path}."))
     return issues
+
+
+def _audience_upload_guard(issues: list[ValidationIssue], key: str, row: dict[str, Any], source_dir: Path) -> None:
+    operation = clean(row.get("upload_operation")).upper()
+    data_path = clean(row.get("upload_data_path"))
+    has_data = bool(data_path) or not is_blank(row.get("upload_data_json"))
+    if operation and operation not in AUDIENCE_UPLOAD_OPERATIONS:
+        issues.append(ValidationIssue("ERROR", "Audiences", key, "upload_operation", "Use ADD, REMOVE, or REPLACE."))
+    if not has_data:
+        if operation or not is_blank(row.get("upload_schema")):
+            issues.append(ValidationIssue("ERROR", "Audiences", key, "upload_data_path", "Provide upload_data_path or upload_data_json."))
+        return
+    if is_blank(row.get("upload_schema")):
+        issues.append(ValidationIssue("ERROR", "Audiences", key, "upload_schema", "upload_schema is required, e.g. EMAIL,FN,LN."))
+    if data_path:
+        path = Path(data_path)
+        if not path.is_absolute():
+            path = source_dir / path
+        if not path.exists():
+            issues.append(ValidationIssue("ERROR", "Audiences", key, "upload_data_path", f"Upload file does not exist: {path}."))
+    _json_guard(issues, "Audiences", key, "upload_data_json", row.get("upload_data_json"))
 
 
 def _validate_bulk_changes(dataset: Dataset) -> list[ValidationIssue]:
@@ -381,6 +317,93 @@ def _approval_guard(issues: list[ValidationIssue], table: str, key: str, row: di
         return
     if not approved(row.get("approval_status")):
         issues.append(ValidationIssue("INFO", table, key, "approval_status", "Row is not approved and will not be created."))
+
+
+_GENDER_VALUES = {"all", "male", "m", "1", "female", "f", "2"}
+
+
+def _targeting_columns_guard(issues: list[ValidationIssue], table: str, key: str, row: dict[str, Any]) -> None:
+    """Audience-targeting column checks for AdSets rows."""
+    age_min = clean(row.get("age_min"))
+    age_max = clean(row.get("age_max"))
+    parsed_min = to_int(age_min) if age_min else None
+    parsed_max = to_int(age_max) if age_max else None
+    if age_min and (parsed_min is None or not 13 <= parsed_min <= 65):
+        issues.append(ValidationIssue("ERROR", table, key, "age_min", "age_min must be a number between 13 and 65."))
+    if age_max and (parsed_max is None or not 13 <= parsed_max <= 65):
+        issues.append(ValidationIssue("ERROR", table, key, "age_max", "age_max must be a number between 13 and 65 (65 means 65+)."))
+    if parsed_min is not None and parsed_max is not None and parsed_max < parsed_min:
+        issues.append(ValidationIssue("ERROR", table, key, "age_max", "age_max must be >= age_min."))
+    for gender in _csv_values(row.get("genders")):
+        if gender.lower() not in _GENDER_VALUES:
+            issues.append(ValidationIssue("ERROR", table, key, "genders", f"Unsupported gender '{gender}'. Use all, male, or female."))
+    for field in ("interests", "behaviors"):
+        for entry in _csv_values(row.get(field)):
+            entry_id = entry.split(":", 1)[0].strip()
+            if not entry_id.isdigit():
+                issues.append(
+                    ValidationIssue(
+                        "ERROR", table, key, field,
+                        f"'{entry}' needs a numeric Meta targeting ID, written as <id> or <id>:<Name>. "
+                        "Find IDs with: python -m meta_ads_pipeline targeting-search --q \"<term>\".",
+                    )
+                )
+    for country in _csv_values(row.get("countries")):
+        if not (len(country) == 2 and country.isalpha()):
+            issues.append(ValidationIssue("WARNING", table, key, "countries", f"'{country}' does not look like a 2-letter ISO country code (UK is GB)."))
+    _json_guard(issues, table, key, "flexible_spec_json", row.get("flexible_spec_json"))
+    _json_guard(issues, table, key, "exclusions_json", row.get("exclusions_json"))
+    _json_shape_guard(issues, table, key, "flexible_spec_json", row.get("flexible_spec_json"), (list, dict), "a JSON list of {interests/behaviors/...} groups")
+    _json_shape_guard(issues, table, key, "exclusions_json", row.get("exclusions_json"), (dict,), "a JSON object like {\"interests\": [...]}")
+
+
+def _audience_refs_guard(
+    issues: list[ValidationIssue],
+    table: str,
+    key: str,
+    field: str,
+    value: Any,
+    audience_rows: dict[str, dict[str, Any]],
+) -> None:
+    for entry in _csv_values(value):
+        audience = audience_rows.get(entry)
+        if audience is None:
+            if not _looks_like_meta_id(entry):
+                issues.append(
+                    ValidationIssue(
+                        "ERROR", table, key, field,
+                        f"'{entry}' is neither an audience_key from the Audiences sheet nor a numeric Meta audience ID.",
+                    )
+                )
+        elif is_blank(audience.get("meta_audience_id")) and not approved(audience.get("approval_status")):
+            issues.append(
+                ValidationIssue(
+                    "WARNING", table, key, field,
+                    f"Audience '{entry}' has no Meta ID and is not approved, so this ad set would be skipped at apply time.",
+                )
+            )
+
+
+def _json_shape_guard(
+    issues: list[ValidationIssue],
+    table: str,
+    key: str,
+    field: str,
+    value: Any,
+    allowed_types: tuple[type, ...],
+    expected: str,
+) -> None:
+    text = clean(value)
+    if not text:
+        return
+    import json
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return  # _json_guard already reported it
+    if not isinstance(parsed, allowed_types):
+        issues.append(ValidationIssue("ERROR", table, key, field, f"Value must be {expected}."))
 
 
 def _looks_like_meta_id(value: str) -> bool:

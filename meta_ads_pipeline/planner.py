@@ -27,7 +27,6 @@ def build_plan(dataset: Dataset) -> list[Action]:
     actions.extend(_adset_actions(dataset))
     actions.extend(_creative_actions(dataset))
     actions.extend(_ad_actions(dataset))
-    actions.extend(_duplicate_actions(dataset))
     actions.extend(_bulk_change_actions(dataset))
     return actions
 
@@ -73,47 +72,47 @@ def _audience_actions(dataset: Dataset) -> list[Action]:
 
 
 def _audience_upload_actions(dataset: Dataset) -> list[Action]:
+    """Member uploads live on the Audiences sheet itself (upload_* columns)."""
     actions: list[Action] = []
-    audiences = _index(dataset, "Audiences")
     base_dir = source_dir(dataset)
-    for row in dataset.tables.get("AudienceUploads", []):
-        key = row_key("AudienceUploads", row)
-        if clean(row.get("applied_at")) or not approved(row.get("approval_status")):
+    for row in dataset.tables.get("Audiences", []):
+        key = row_key("Audiences", row)
+        if not clean(row.get("upload_data_path")) and not clean(row.get("upload_data_json")):
             continue
-        audience_key = clean(row.get("audience_key"))
-        audience = audiences.get(audience_key, {})
-        audience_id = clean(audience.get("meta_audience_id")) or placeholder("audience", audience_key)
+        if clean(row.get("upload_applied_at")) or not approved(row.get("approval_status")):
+            continue
+        audience_id = clean(row.get("meta_audience_id")) or placeholder("audience", key)
         body = {
-            "operation": clean(row.get("operation")).upper() or "ADD",
+            "operation": clean(row.get("upload_operation")).upper() or "ADD",
             "payload": {
-                "schema": [part.strip() for part in clean(row.get("schema")).split(",") if part.strip()],
+                "schema": [part.strip() for part in clean(row.get("upload_schema")).split(",") if part.strip()],
                 "data": _audience_upload_data(row, base_dir),
             },
         }
         depends = []
-        if not clean(audience.get("meta_audience_id")):
-            depends.append(f"015_create_audience_{audience_key}")
+        if not clean(row.get("meta_audience_id")):
+            depends.append(f"015_create_audience_{key}")
         actions.append(
             Action(
                 action_id=f"016_upload_audience_{key}",
                 operation="upload",
                 object_type="audience",
-                object_key=audience_key,
+                object_key=key,
                 command=["GRAPH", "POST", f"{audience_id}/users"],
-                payload={"row": row, "table": "AudienceUploads"},
+                payload={"row": row, "table": "Audiences"},
                 executor="graph",
                 method="POST",
                 endpoint=f"{audience_id}/users",
                 body=body,
                 id_path="",
                 writeback=[
-                    ("AudienceUploads", key, "applied_at", "$now"),
-                    ("AudienceUploads", key, "result", "LIVE_UPLOADED"),
-                    ("AudienceUploads", key, "error", ""),
+                    ("Audiences", key, "upload_applied_at", "$now"),
+                    ("Audiences", key, "upload_result", "LIVE_UPLOADED"),
+                    ("Audiences", key, "upload_error", ""),
                 ],
                 depends_on=depends,
-                reason="Approved audience upload has not been applied.",
-                source_table="AudienceUploads",
+                reason="Audience row has unapplied upload data.",
+                source_table="Audiences",
                 source_key=key,
             )
         )
@@ -270,8 +269,7 @@ def _adset_actions(dataset: Dataset) -> list[Action]:
     actions: list[Action] = []
     campaigns = _index(dataset, "Campaigns")
     accounts = _index(dataset, "Accounts")
-    targeting_presets = _index(dataset, "TargetingPresets")
-    automation_settings = _automation_index(dataset)
+    audiences = _index(dataset, "Audiences")
     for row in dataset.tables.get("AdSets", []):
         key = row_key("AdSets", row)
         if clean(row.get("meta_adset_id")) or not approved(row.get("approval_status")):
@@ -280,10 +278,13 @@ def _adset_actions(dataset: Dataset) -> list[Action]:
         campaign = campaigns.get(campaign_key, {})
         account = accounts.get(clean(campaign.get("account_key")), {})
         campaign_id = clean(campaign.get("meta_campaign_id")) or placeholder("campaign", campaign_key)
-        automation = automation_settings.get(("adset", key), {})
-        if _adset_requires_graph(row, automation):
+        if _adset_requires_graph(row):
             endpoint = f"{placeholder('account', clean(campaign.get('account_key')))}/adsets"
-            body = _adset_graph_body(row, campaign_id, targeting_presets, automation)
+            body = _adset_graph_body(row, campaign_id, audiences)
+            depends = [f"010_create_campaign_{campaign_key}"] if not clean(campaign.get("meta_campaign_id")) else []
+            for audience_key in _referenced_audience_keys(row, audiences):
+                if not clean(audiences[audience_key].get("meta_audience_id")):
+                    depends.append(f"015_create_audience_{audience_key}")
             actions.append(
                 Action(
                     action_id=f"020_create_adset_{key}",
@@ -296,7 +297,7 @@ def _adset_actions(dataset: Dataset) -> list[Action]:
                     method="POST",
                     endpoint=endpoint,
                     body=body,
-                    depends_on=[f"010_create_campaign_{campaign_key}"] if not clean(campaign.get("meta_campaign_id")) else [],
+                    depends_on=_dedupe_strings(depends),
                     reason="Approved ad set needs Graph API targeting or automation fields.",
                     source_table="AdSets",
                     source_key=key,
@@ -334,14 +335,15 @@ def _adset_actions(dataset: Dataset) -> list[Action]:
 
 
 def _creative_actions(dataset: Dataset) -> list[Action]:
+    """Creatives are defined inline on Ads rows; an ad without a meta_creative_id
+    gets its creative created first (keyed by the ad_key)."""
     actions: list[Action] = []
-    accounts = _index(dataset, "Accounts")
     base_dir = source_dir(dataset)
-    for row in dataset.tables.get("Creatives", []):
-        key = row_key("Creatives", row)
+    for row in dataset.tables.get("Ads", []):
+        key = row_key("Ads", row)
         if clean(row.get("meta_creative_id")) or not approved(row.get("approval_status")):
             continue
-        account = accounts.get(clean(row.get("account_key")), {})
+        account = _account_for_ad(dataset, row)
         command = _meta_prefix(account) + ["creative", "create"]
         _extend(command, "--name", row.get("name"))
         media_arg = "--video" if clean(row.get("format")).lower() == "video" else "--image"
@@ -365,10 +367,10 @@ def _creative_actions(dataset: Dataset) -> list[Action]:
                 object_type="creative",
                 object_key=key,
                 command=command,
-                payload={"row": row, "table": "Creatives", "id_column": "meta_creative_id"},
-                depends_on=[f"001_create_account_{row.get('account_key')}"] if _needs_account_create(account) else [],
-                reason="Approved creative has no Meta creative ID.",
-                source_table="Creatives",
+                payload={"row": row, "table": "Ads", "id_column": "meta_creative_id"},
+                depends_on=[f"001_create_account_{account.get('account_key')}"] if _needs_account_create(account) else [],
+                reason="Approved ad has no Meta creative ID yet; its inline creative is created first.",
+                source_table="Ads",
                 source_key=key,
             )
         )
@@ -378,20 +380,15 @@ def _creative_actions(dataset: Dataset) -> list[Action]:
 def _ad_actions(dataset: Dataset) -> list[Action]:
     actions: list[Action] = []
     adsets = _index(dataset, "AdSets")
-    creatives = _index(dataset, "Creatives")
-    campaigns = _index(dataset, "Campaigns")
-    accounts = _index(dataset, "Accounts")
     for row in dataset.tables.get("Ads", []):
         key = row_key("Ads", row)
         if clean(row.get("meta_ad_id")) or not approved(row.get("approval_status")):
             continue
         adset_key = clean(row.get("adset_key"))
-        creative_key = clean(row.get("creative_key"))
         adset = adsets.get(adset_key, {})
-        campaign = campaigns.get(clean(adset.get("campaign_key")), {})
-        account = accounts.get(clean(campaign.get("account_key")), {})
+        account = _account_for_ad(dataset, row)
         adset_id = clean(adset.get("meta_adset_id")) or placeholder("adset", adset_key)
-        creative_id = clean(creatives.get(creative_key, {}).get("meta_creative_id")) or placeholder("creative", creative_key)
+        creative_id = clean(row.get("meta_creative_id")) or placeholder("creative", key)
         command = _meta_prefix(account) + ["ad", "create", adset_id]
         _extend(command, "--name", row.get("name"))
         _extend(command, "--creative-id", creative_id)
@@ -400,8 +397,8 @@ def _ad_actions(dataset: Dataset) -> list[Action]:
         depends = []
         if not clean(adset.get("meta_adset_id")):
             depends.append(f"020_create_adset_{adset_key}")
-        if not clean(creatives.get(creative_key, {}).get("meta_creative_id")):
-            depends.append(f"030_create_creative_{creative_key}")
+        if not clean(row.get("meta_creative_id")):
+            depends.append(f"030_create_creative_{key}")
         actions.append(
             Action(
                 action_id=f"040_create_ad_{key}",
@@ -417,6 +414,12 @@ def _ad_actions(dataset: Dataset) -> list[Action]:
             )
         )
     return actions
+
+
+def _account_for_ad(dataset: Dataset, ad_row: dict[str, Any]) -> dict[str, Any]:
+    adset = _index(dataset, "AdSets").get(clean(ad_row.get("adset_key")), {})
+    campaign = _index(dataset, "Campaigns").get(clean(adset.get("campaign_key")), {})
+    return _index(dataset, "Accounts").get(clean(campaign.get("account_key")), {})
 
 
 def _bulk_change_actions(dataset: Dataset) -> list[Action]:
@@ -530,15 +533,20 @@ def _bulk_change_actions(dataset: Dataset) -> list[Action]:
             field = "desired_status"
             row["new_value"] = "PAUSED"
         elif operation == "REPLACE_CREATIVE":
-            field = "creative_key"
+            field = "meta_creative_id"
         elif operation == "REPLACE_TARGETING":
-            field = "targeting_preset_key" if clean(row.get("new_value")) else "targeting_json"
+            field = "targeting_json"
+            if not clean(row.get("new_value")):
+                row["new_value"] = clean(row.get("value_json"))
         if field not in UPDATABLE_FIELDS[object_type]:
             continue
         command = _meta_prefix_for_object(dataset, object_type, target) + [object_type, "update", target_ref]
         value = clean(row.get("new_value"))
-        if object_type == "ad" and field == "creative_key":
-            value = ids.get("creative", {}).get(value) or placeholder("creative", value)
+        if object_type == "ad" and field == "meta_creative_id":
+            # new_value may be another ad's key (reuse that row's creative) or a raw creative ID.
+            value = ids.get("creative", {}).get(value) or (
+                placeholder("creative", value) if _target_is_known_key(dataset, "creative", value) else value
+            )
         api_field = UPDATABLE_FIELDS[object_type][field]
         if api_field.startswith("--"):
             _extend(command, api_field, value)
@@ -553,7 +561,7 @@ def _bulk_change_actions(dataset: Dataset) -> list[Action]:
         depends = []
         if target_ref.startswith("${"):
             depends.append(_create_action_id(object_type, target))
-        if object_type == "ad" and field == "creative_key" and value.startswith("${"):
+        if object_type == "ad" and field == "meta_creative_id" and value.startswith("${"):
             depends.append(_create_action_id("creative", clean(row.get("new_value"))))
         actions.append(
             Action(
@@ -571,58 +579,6 @@ def _bulk_change_actions(dataset: Dataset) -> list[Action]:
                 reason=clean(row.get("reason")) or "Approved bulk change.",
                 source_table="BulkChanges",
                 source_key=change_key,
-            )
-        )
-    return actions
-
-
-def _duplicate_actions(dataset: Dataset) -> list[Action]:
-    actions: list[Action] = []
-    ids = existing_ids(dataset)
-    for row in dataset.tables.get("DuplicateJobs", []):
-        key = row_key("DuplicateJobs", row)
-        if clean(row.get("applied_at")) or not approved(row.get("approval_status")):
-            continue
-        object_type = clean(row.get("object_level")).lower()
-        if object_type not in {"campaign", "adset", "ad"}:
-            continue
-        source = clean(row.get("source_key_or_meta_id"))
-        source_id = ids.get(object_type, {}).get(source) or (
-            placeholder(object_type, source) if _target_is_known_key(dataset, object_type, source) else source
-        )
-        body = _duplicate_body(row, dataset, object_type)
-        depends = []
-        if source_id.startswith("${"):
-            depends.append(_create_action_id(object_type, source))
-        destination = clean(row.get("destination_parent_key_or_meta_id"))
-        destination_object = {"campaign": "account", "adset": "campaign", "ad": "adset"}[object_type]
-        if destination and _target_is_known_key(dataset, destination_object, destination):
-            destination_id = ids.get(destination_object, {}).get(destination) or placeholder(destination_object, destination)
-            if isinstance(destination_id, str) and destination_id.startswith("${"):
-                depends.append(_create_action_id(destination_object, destination))
-        actions.append(
-            Action(
-                action_id=f"080_duplicate_{key}",
-                operation="duplicate",
-                object_type=object_type,
-                object_key=source,
-                command=["GRAPH", "POST", f"{source_id}/copies"],
-                payload={"row": row, "table": "DuplicateJobs"},
-                executor="graph",
-                method="POST",
-                endpoint=f"{source_id}/copies",
-                body=body,
-                id_path="",
-                writeback=[
-                    ("DuplicateJobs", key, "applied_at", "$now"),
-                    ("DuplicateJobs", key, "result_meta_ids", "$result_id"),
-                    ("DuplicateJobs", key, "result", "LIVE_DUPLICATED"),
-                    ("DuplicateJobs", key, "error", ""),
-                ],
-                depends_on=_dedupe_strings(depends),
-                reason=f"Approved duplicate job for {object_type}.",
-                source_table="DuplicateJobs",
-                source_key=key,
             )
         )
     return actions
@@ -648,17 +604,14 @@ def _meta_prefix_for_object(dataset: Dataset, object_type: str, key_or_id: str) 
         adset = _index(dataset, "AdSets").get(key_or_id, {})
         campaign = _index(dataset, "Campaigns").get(clean(adset.get("campaign_key")), {})
         return _meta_prefix(accounts.get(clean(campaign.get("account_key")), {}))
-    if object_type == "creative":
-        creative = _index(dataset, "Creatives").get(key_or_id, {})
-        return _meta_prefix(accounts.get(clean(creative.get("account_key")), {}))
-    if object_type == "audience":
-        audience = _index(dataset, "Audiences").get(key_or_id, {})
-        return _meta_prefix(accounts.get(clean(audience.get("account_key")), {}))
-    if object_type == "ad":
+    if object_type in {"creative", "ad"}:
         ad = _index(dataset, "Ads").get(key_or_id, {})
         adset = _index(dataset, "AdSets").get(clean(ad.get("adset_key")), {})
         campaign = _index(dataset, "Campaigns").get(clean(adset.get("campaign_key")), {})
         return _meta_prefix(accounts.get(clean(campaign.get("account_key")), {}))
+    if object_type == "audience":
+        audience = _index(dataset, "Audiences").get(key_or_id, {})
+        return _meta_prefix(accounts.get(clean(audience.get("account_key")), {}))
     return ["meta", "--output", "json", "--no-input", "ads"]
 
 
@@ -729,16 +682,16 @@ def _audience_body(row: dict[str, Any], audiences: dict[str, dict[str, Any]]) ->
 
 
 def _audience_upload_data(row: dict[str, Any], base_dir: Path) -> list[list[str]]:
-    if clean(row.get("data_json")):
-        loaded = _json_value(row.get("data_json"), [])
+    if clean(row.get("upload_data_json")):
+        loaded = _json_value(row.get("upload_data_json"), [])
         return loaded if isinstance(loaded, list) else []
-    data_path = Path(clean(row.get("data_path")))
+    data_path = Path(clean(row.get("upload_data_path")))
     if not data_path.is_absolute():
         data_path = base_dir / data_path
     with data_path.open(newline="", encoding="utf-8") as handle:
         reader = csv.reader(handle)
         rows = list(reader)
-    if rows and [cell.strip().upper() for cell in rows[0]] == [part.strip().upper() for part in clean(row.get("schema")).split(",") if part.strip()]:
+    if rows and [cell.strip().upper() for cell in rows[0]] == [part.strip().upper() for part in clean(row.get("upload_schema")).split(",") if part.strip()]:
         rows = rows[1:]
     return rows
 
@@ -750,34 +703,34 @@ def _json_value(value: Any, default: Any) -> Any:
     return json.loads(text)
 
 
-def _automation_index(dataset: Dataset) -> dict[tuple[str, str], dict[str, Any]]:
-    rows: dict[tuple[str, str], dict[str, Any]] = {}
-    for row in dataset.tables.get("AutomationSettings", []):
-        if approved(row.get("approval_status")):
-            rows[(clean(row.get("object_level")).lower(), clean(row.get("object_key")))] = row
-    return rows
-
-
-def _adset_requires_graph(row: dict[str, Any], automation: dict[str, Any]) -> bool:
+def _adset_requires_graph(row: dict[str, Any]) -> bool:
     graph_fields = [
-        "targeting_preset_key",
         "targeting_json",
         "targeting_automation_json",
         "promoted_object_json",
+        "flexible_spec_json",
+        "exclusions_json",
+        "bid_strategy",
     ]
     if any(clean(row.get(field)) for field in graph_fields):
         return True
-    if automation:
+    if any(clean(row.get(field)) for field in _AUTOMATION_TOGGLES):
         return True
-    targeting_fields = ["regions", "custom_audiences", "excluded_audiences", "interests", "placements"]
+    # The meta CLI create only carries countries; every other targeting
+    # dimension (age, gender, geo detail, interests, audiences...) must go
+    # through the Graph API or it would be silently dropped.
+    targeting_fields = [
+        "regions", "cities", "zips", "age_min", "age_max", "genders", "languages",
+        "interests", "behaviors", "custom_audiences", "excluded_audiences",
+        "placements", "facebook_positions", "instagram_positions", "device_platforms",
+    ]
     return any(clean(row.get(field)) for field in targeting_fields)
 
 
 def _adset_graph_body(
     row: dict[str, Any],
     campaign_id: str,
-    targeting_presets: dict[str, dict[str, Any]],
-    automation: dict[str, Any],
+    audiences: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "campaign_id": campaign_id,
@@ -790,15 +743,16 @@ def _adset_graph_body(
         ("daily_budget_cents", "daily_budget"),
         ("lifetime_budget_cents", "lifetime_budget"),
         ("bid_amount_cents", "bid_amount"),
+        ("bid_strategy", "bid_strategy"),
         ("start_time", "start_time"),
         ("end_time", "end_time"),
     ]:
         if clean(row.get(column)):
             body[api_field] = clean(row.get(column))
-    targeting = _adset_targeting(row, targeting_presets, automation)
+    targeting = _adset_targeting(row, audiences or {})
     if targeting:
         body["targeting"] = targeting
-    targeting_automation = _adset_targeting_automation(row, automation)
+    targeting_automation = _adset_targeting_automation(row)
     if targeting_automation:
         body["targeting_automation"] = targeting_automation
     promoted_object = _json_value(row.get("promoted_object_json"), {})
@@ -814,23 +768,20 @@ def _adset_graph_body(
 
 def _adset_targeting(
     row: dict[str, Any],
-    targeting_presets: dict[str, dict[str, Any]],
-    automation: dict[str, Any],
+    audiences: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    preset = targeting_presets.get(clean(row.get("targeting_preset_key")), {})
-    targeting = _targeting_from_row(preset)
-    targeting = _deep_merge(targeting, _targeting_from_row(row))
-    targeting = _deep_merge(targeting, _json_value(preset.get("targeting_json"), {}))
+    targeting = _targeting_from_row(row, audiences)
     targeting = _deep_merge(targeting, _json_value(row.get("targeting_json"), {}))
-    if _truth_text(automation.get("advantage_placements")):
+    if _truth_text(row.get("advantage_placements")):
         for field in ["publisher_platforms", "facebook_positions", "instagram_positions", "device_platforms"]:
             targeting.pop(field, None)
     return targeting
 
 
-def _targeting_from_row(row: dict[str, Any]) -> dict[str, Any]:
+def _targeting_from_row(row: dict[str, Any], audiences: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     if not row:
         return {}
+    audiences = audiences or {}
     targeting: dict[str, Any] = {}
     countries = _csv_values(row.get("countries"))
     regions = _csv_values(row.get("regions"))
@@ -867,30 +818,74 @@ def _targeting_from_row(row: dict[str, Any]) -> dict[str, Any]:
     for source, target in [
         ("interests", "interests"),
         ("behaviors", "behaviors"),
-        ("custom_audience_keys", "custom_audiences"),
+    ]:
+        values = _csv_values(row.get(source))
+        if values:
+            targeting[target] = [_detailed_targeting_entry(value) for value in values]
+    for source, target in [
         ("custom_audiences", "custom_audiences"),
-        ("excluded_audience_keys", "excluded_custom_audiences"),
         ("excluded_audiences", "excluded_custom_audiences"),
     ]:
         values = _csv_values(row.get(source))
         if values:
-            targeting[target] = [{"id": placeholder("audience", value) if source.endswith("_keys") else value} for value in values]
+            targeting[target] = _dedupe_list([{"id": _resolve_audience_ref(value, audiences)} for value in values])
+    flexible_spec = _json_value(row.get("flexible_spec_json"), [])
+    if flexible_spec:
+        targeting["flexible_spec"] = flexible_spec if isinstance(flexible_spec, list) else [flexible_spec]
+    exclusions = _json_value(row.get("exclusions_json"), {})
+    if exclusions:
+        targeting["exclusions"] = exclusions
     placements = _csv_values(row.get("placements"))
     if placements and "automatic" not in [placement.lower() for placement in placements]:
         targeting["publisher_platforms"] = placements
     return {key: value for key, value in targeting.items() if value not in ("", [], {})}
 
 
-def _adset_targeting_automation(row: dict[str, Any], automation: dict[str, Any]) -> dict[str, Any]:
+def _detailed_targeting_entry(value: str) -> dict[str, str]:
+    """Parse an interests/behaviors cell entry: '6003306084421', or '6003306084421:Yoga'."""
+    entry_id, _, name = value.partition(":")
+    entry_id = entry_id.strip()
+    name = name.strip()
+    if name:
+        return {"id": entry_id, "name": name}
+    return {"id": entry_id}
+
+
+def _resolve_audience_ref(value: str, audiences: dict[str, dict[str, Any]]) -> str:
+    """Map a workbook audience_key to its Meta ID (or a placeholder resolved at
+    apply time); anything else is passed through as an existing Meta audience ID."""
+    audience = audiences.get(value)
+    if audience is None:
+        return value
+    return clean(audience.get("meta_audience_id")) or placeholder("audience", value)
+
+
+def _referenced_audience_keys(row: dict[str, Any], audiences: dict[str, dict[str, Any]]) -> list[str]:
+    keys: list[str] = []
+    for column in ("custom_audiences", "excluded_audiences"):
+        keys.extend(value for value in _csv_values(row.get(column)) if value in audiences)
+    return _dedupe_strings(keys)
+
+
+# Advantage+ toggle columns on the AdSets sheet (advantage_placements is applied
+# in _adset_targeting by stripping manual placement fields).
+_AUTOMATION_TOGGLES = (
+    "advantage_audience",
+    "detailed_targeting_expansion",
+    "custom_audience_expansion",
+    "advantage_placements",
+)
+
+
+def _adset_targeting_automation(row: dict[str, Any]) -> dict[str, Any]:
     targeting_automation = _json_value(row.get("targeting_automation_json"), {})
-    targeting_automation = _deep_merge(targeting_automation, _json_value(automation.get("targeting_automation_json"), {}))
     toggle_map = {
         "advantage_audience": "advantage_audience",
         "detailed_targeting_expansion": "detailed_targeting",
         "custom_audience_expansion": "custom_audience",
     }
     for source, target in toggle_map.items():
-        value = clean(automation.get(source))
+        value = clean(row.get(source))
         if value:
             targeting_automation[target] = 1 if _truth_text(value) else 0
     return targeting_automation

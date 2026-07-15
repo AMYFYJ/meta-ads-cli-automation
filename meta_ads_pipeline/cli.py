@@ -11,11 +11,14 @@ from .adapters import is_sandbox_account, resolve_account
 from .assets import ensure_sample_assets
 from .doctor import run_doctor
 from .executor import execute_actions, validation_rows
+from .guards import active_status_violations, find_active_status
 from .insights import generate_mock_insights, get_live_insights
 from .optimization import generate_optimization_changes
 from .planner import action_dicts, build_plan
+from .migrate import migrate_workbook
 from .schema import TABLES
 from .storage import create_sqlite_template, create_template, load_source, save_with_updates
+from .targeting import SEARCH_KINDS, search_targeting, workbook_cell
 from .validators import has_blocking_errors, validate_dataset
 
 
@@ -95,6 +98,17 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--workdir", default="outputs/demo")
     demo.set_defaults(func=cmd_demo)
 
+    migrate = sub.add_parser("migrate", help="Migrate a workbook to the consolidated tab layout (presets/automation -> AdSets, creatives -> Ads, uploads -> Audiences).")
+    migrate.add_argument("--source", required=True)
+    migrate.add_argument("--out-source", required=True, help="Destination xlsx (may equal --source to migrate in place).")
+    migrate.set_defaults(func=cmd_migrate)
+
+    tsearch = sub.add_parser("targeting-search", help="Look up detailed-targeting IDs to paste into the interests/behaviors columns.")
+    tsearch.add_argument("--q", required=True, help="Search term, e.g. 'yoga'.")
+    tsearch.add_argument("--kind", default="interest", choices=list(SEARCH_KINDS), help="Targeting category to search.")
+    tsearch.add_argument("--limit", type=int, default=15)
+    tsearch.set_defaults(func=cmd_targeting_search)
+
     doctor = sub.add_parser("doctor", help="Preflight checks for live/sandbox readiness.")
     doctor.add_argument("--live", action="store_true", help="Also run a read-only token check against Meta.")
     doctor.add_argument("--account", default="", help="Override ad account id (act_...) for the check.")
@@ -139,43 +153,9 @@ def cmd_plan(args: argparse.Namespace) -> int:
     return 0
 
 
-_STATUS_KEYS = {"status", "desired_status", "status_option", "duplicate_status_option", "effective_status"}
-
-
-def _active_status_violations(actions: list[Any]) -> list[tuple[str, str]]:
-    """Return (action_id, where) for every planned action that would set a status to ACTIVE."""
-    violations: list[tuple[str, str]] = []
-    for action in actions:
-        for index, token in enumerate(action.command):
-            if token == "--status" and index + 1 < len(action.command) and str(action.command[index + 1]).upper() == "ACTIVE":
-                violations.append((action.action_id, "command --status ACTIVE"))
-        for name, mapping in (("body", action.body), ("params", action.params), ("payload", action.payload)):
-            path = _find_active_status(mapping)
-            if path:
-                violations.append((action.action_id, f"{name}.{path}"))
-    return violations
-
-
-def _find_active_status(value: Any, path: str = "") -> str:
-    if isinstance(value, dict):
-        for key, child in value.items():
-            child_path = f"{path}.{key}" if path else str(key)
-            if str(key).lower() in _STATUS_KEYS and isinstance(child, str) and child.upper() == "ACTIVE":
-                return child_path
-            found = _find_active_status(child, child_path)
-            if found:
-                return found
-    elif isinstance(value, list):
-        for index, child in enumerate(value):
-            found = _find_active_status(child, f"{path}[{index}]")
-            if found:
-                return found
-    elif isinstance(value, str) and value.strip().startswith(("{", "[")):
-        try:
-            return _find_active_status(json.loads(value), path)
-        except (ValueError, TypeError):
-            return ""
-    return ""
+# Force-paused guard logic lives in guards.py so the ads_agent layer shares one implementation.
+_active_status_violations = active_status_violations
+_find_active_status = find_active_status
 
 
 def cmd_apply(args: argparse.Namespace) -> int:
@@ -316,6 +296,42 @@ def cmd_demo(args: argparse.Namespace) -> int:
     print(f"- Insights workbook: {insights}")
     print(f"- Actions succeeded: {sum(1 for result in results if result.ok)}/{len(results)}")
     return 0 if all(result.ok for result in results) else 1
+
+
+def cmd_migrate(args: argparse.Namespace) -> int:
+    source = Path(args.source)
+    if source.suffix.lower() != ".xlsx":
+        print("migrate currently supports .xlsx workbooks only.", file=sys.stderr)
+        return 2
+    notes = migrate_workbook(args.source, args.out_source)
+    print(f"Migrated {args.source} -> {args.out_source} ({len(TABLES)} consolidated tabs).")
+    for note in notes:
+        print(f"  - {note}")
+    return 0
+
+
+def cmd_targeting_search(args: argparse.Namespace) -> int:
+    _load_dotenv()
+    results = search_targeting(args.q, kind=args.kind, limit=args.limit)
+    if not results:
+        print(f"No {args.kind} results for '{args.q}'.")
+        return 1
+    width = max(len(row["id"]) for row in results)
+    for row in results:
+        size = f"  (~{row['audience_size']:,})" if isinstance(row["audience_size"], int) else ""
+        path = f"  [{row['path']}]" if row["path"] else ""
+        print(f"{row['id']:<{width}}  {row['name']}{size}{path}")
+    print("\nPaste into the workbook interests/behaviors cell (keep only the ones you want):")
+    print(workbook_cell(results))
+    return 0
+
+
+def _load_dotenv() -> None:
+    try:
+        from dotenv import load_dotenv
+    except ImportError:  # pragma: no cover - dotenv is in requirements
+        return
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
