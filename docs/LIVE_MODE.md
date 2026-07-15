@@ -3,11 +3,11 @@
 Mock mode is for demos and pipeline QA. Live mode calls Meta's official `meta-ads` CLI and the
 Graph API fallback for account creation, audiences, uploads, targeting, duplicates, patches, and deletes.
 
-## Sandbox first (start here)
+## Stay paused (start here)
 
-If you are new to the Meta Marketing API, **do not point live mode at a real ad account yet.**
-Set up a **Sandbox ad account** first — API calls behave like production but never deliver ads
-or spend money. Follow [SANDBOX_SETUP.md](SANDBOX_SETUP.md), then come back here.
+Live mode targets a real ad account, so keep `META_FORCE_PAUSED=1` set: every object is
+created `PAUSED` and any apply that would set a status to ACTIVE is refused. Activation is
+a deliberate human step after you have reviewed the built campaign in Ads Manager.
 
 Run the preflight check before any live run:
 

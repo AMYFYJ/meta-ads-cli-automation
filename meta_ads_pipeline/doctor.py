@@ -79,7 +79,7 @@ def _check_env_vars(live: bool) -> dict[str, Any]:
             "env",
             status,
             f"Missing env vars: {', '.join(missing)}.",
-            "Set them (see docs/SANDBOX_SETUP.md). Required for live/sandbox runs.",
+            "Set them in .env (see docs/LIVE_MODE.md). Required for live runs.",
         )
     optional = [name for name in ("BUSINESS_ID", "META_API_VERSION") if not clean(os.environ.get(name))]
     detail = "ACCESS_TOKEN and AD_ACCOUNT_ID are set."

@@ -168,7 +168,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
         if require_sandbox and not is_sandbox_account(target_account):
             print(
                 f"Refusing live apply: target account '{target_account or '(unset)'}' is not the sandbox account. "
-                "Set SANDBOX_AD_ACCOUNT_ID (+ META_SANDBOX=1) or pass --account <sandbox>. See docs/SANDBOX_SETUP.md.",
+                "Set SANDBOX_AD_ACCOUNT_ID (+ META_SANDBOX=1) or pass --account <sandbox>, or unset META_REQUIRE_SANDBOX.",
                 file=sys.stderr,
             )
             return 2
