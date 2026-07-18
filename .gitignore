@@ -17,3 +17,6 @@ state/
 
 # Live workbook + archives (real account/page/pixel IDs) stay local
 data/
+
+# Claude Code local settings and worktrees
+.claude/
