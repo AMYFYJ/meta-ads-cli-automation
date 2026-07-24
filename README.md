@@ -1,6 +1,13 @@
-# Meta Ads CLI Automation Pipeline
+# Meta Ads CLI Automation
 
-This project turns a campaign planning workbook or SQLite database into a repeatable Meta ads publishing workflow. It can run fully offline in `mock` mode for team demos, and it can run in `live` mode against Meta's official `meta-ads` CLI when Python 3.12+, credentials, and ad account access are available.
+Excel/SQLite-first automation for planning, validating, publishing, and optimizing Meta
+ads. The pipeline can run fully offline in deterministic `mock` mode, or in `live` mode
+through Meta's official `meta-ads` CLI and Graph API.
+
+**Canonical repository:** [AMYFYJ/meta-ads-cli-automation](https://github.com/AMYFYJ/meta-ads-cli-automation)
+
+Python 3.11+ supports the local and mock workflows. Live publishing requires Python
+3.12+, Meta credentials, and access to the target ad account.
 
 ## What It Covers
 
@@ -16,11 +23,35 @@ This project turns a campaign planning workbook or SQLite database into a repeat
 
 ## Current Status
 
-As of July 14, 2026, live mode runs against a real ad account with billing set up, forced `PAUSED` via `META_FORCE_PAUSED=1`:
+Repository baseline verified on July 24, 2026:
 
-- A full campaign → ad set → creative → ad tree publishes live end to end (`doctor --live` passes). See [docs/AD_CREATION_WORKFLOW.md](docs/AD_CREATION_WORKFLOW.md) for the recipe and [examples/build_ad_campaign.py](examples/build_ad_campaign.py) to generate a minimal source workbook.
+- The local `main` branch is aligned with `origin/main`.
+- The complete automated suite passes: **67 passed, 3 skipped**. The skipped tests are
+  opt-in checks for the real LLM agent and live Meta sandbox.
 - The workbook was consolidated from 15 tabs to 10: targeting presets and Advantage+ settings folded into `AdSets` columns, creatives folded into `Ads` rows, audience uploads folded into `Audiences`, and duplicate jobs folded into `BulkChanges`. `migrate` upgrades older workbooks in place.
-- The full test suite (67 tests) plus a 52-check end-to-end mock scenario covers setup, targeting, launch, bulk operations, rule-driven optimization, and the force-paused guards.
+- The 52-check end-to-end mock scenario covers setup, targeting, launch, bulk operations,
+  rule-driven optimization, and force-paused guards.
+
+The live path was last verified on July 14, 2026 against a real ad account with billing
+configured and `META_FORCE_PAUSED=1`: a full campaign → ad set → creative → ad tree
+published end to end while remaining paused. See
+[docs/AD_CREATION_WORKFLOW.md](docs/AD_CREATION_WORKFLOW.md) for the recipe and
+[examples/build_ad_campaign.py](examples/build_ad_campaign.py) for the minimal workbook
+builder.
+
+## Project Layout
+
+| Path | Purpose |
+| --- | --- |
+| `meta_ads_pipeline/` | Deterministic CLI for validation, planning, publishing, insights, migration, and optimization |
+| `ads_agent/` | Optional LLM analysis layer that writes human-reviewable `PENDING` proposals |
+| `examples/` | Sample workbook, SQLite source, assets, and campaign builder |
+| `docs/` | Architecture, schema, targeting, live-mode, and agent guides |
+| `tests/` | Mock, guardrail, targeting, migration, insights, and live-gated tests |
+
+The LLM agent is deliberately separated from execution: it cannot approve, activate,
+delete, or apply changes. A human approves workbook rows, and the deterministic pipeline
+executes them in a separate command.
 
 ## Getting Started (install → launch)
 
@@ -123,7 +154,7 @@ in [launchd/](launchd/) (see [docs/AGENT.md](docs/AGENT.md)).
 ### 8. Verify
 
 ```bash
-python -m pytest tests/ -q
+.venv/bin/python -m pytest tests/ -q
 ```
 
 ## Agent Automation (ads_agent)
